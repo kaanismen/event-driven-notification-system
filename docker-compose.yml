@@ -1,0 +1,61 @@
+# One command starts the whole stack: `docker compose up --build` (or `make up`).
+# Values in ${...} can be overridden in a local .env file; see .env.example.
+name: notifier
+
+services:
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://notifier:${POSTGRES_PASSWORD:-notifier}@postgres:5432/notifier?sslmode=disable
+      HTTP_ADDR: ":8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-15s}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # Longer than SHUTDOWN_TIMEOUT, so Docker does not kill the app mid-drain.
+    stop_grace_period: 20s
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: notifier
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-notifier}
+      POSTGRES_DB: notifier
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Postgres 18 images keep data under /var/lib/postgresql/<major>/, so the volume
+      # is mounted one level up, which also makes future major upgrades possible.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notifier -d notifier"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # Throwaway server for integration tests (ADR-0010). Started only by `make test`
+  # through the "test" profile, so `docker compose up` never runs it.
+  postgres-test:
+    image: postgres:18-alpine
+    profiles: ["test"]
+    environment:
+      POSTGRES_PASSWORD: test
+    ports:
+      - "${TEST_POSTGRES_PORT:-55432}:5432"
+    # Data lives in RAM and durability is switched off: the data is disposable, and this
+    # makes create/drop database per test fast.
+    tmpfs:
+      - /var/lib/postgresql
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

@@ -1,0 +1,8 @@
+# Keep the build context small and keep local or private files out of images.
+.git
+.env
+private/
+*.pdf
+CLAUDE.md
+CLAUDE.local.md
+docs/
