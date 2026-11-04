@@ -1,7 +1,7 @@
 # ADR-0003: Rate limiter scope
 
-- Status: Proposed
-- Date: 2026-11-04
+- Status: Accepted
+- Date: 2026-11-04 (proposed), 2026-11-05 (accepted by the maintainer)
 
 ## Context
 
@@ -32,7 +32,7 @@ Same code, but the operator sets `RATE_LIMIT_PER_CHANNEL = 100 / number_of_worke
 - Cons: a network round trip per token (or batched token leases), an extra dependency (Redis), or
   extra write load on a hot Postgres row.
 
-## Recommendation
+## Decision
 
 **Option A, deployed as one worker instance, with Option B documented as the scaling rule.** The
 Compose setup runs one instance. The README states clearly that the limit is per process and that

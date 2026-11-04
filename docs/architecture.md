@@ -1,7 +1,6 @@
-# Architecture (proposal)
+# Architecture
 
-Status: **Proposed** in Phase 0. It assumes the recommended options in ADR-0001 to ADR-0008. If the
-maintainer picks a different option, this document changes with it.
+Status: **Accepted** (2026-11-05). It follows the options chosen in ADR-0001 to ADR-0008.
 
 ## Overview
 
@@ -96,7 +95,7 @@ stateDiagram-v2
 Main index: a partial index on `(channel, priority, next_attempt_at) WHERE status = 'pending'`, so
 the claim query only touches due rows and stays fast however many finished rows exist.
 
-## Package layout (proposal)
+## Package layout
 
 ```
 cmd/notifier/          main: wiring, config, signal handling, graceful shutdown

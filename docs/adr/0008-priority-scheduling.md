@@ -1,7 +1,7 @@
 # ADR-0008: Priority scheduling and starvation
 
-- Status: Proposed
-- Date: 2026-11-04
+- Status: Accepted
+- Date: 2026-11-04 (proposed), 2026-11-05 (accepted by the maintainer)
 
 ## Context
 
@@ -38,7 +38,7 @@ A message's priority rises the longer it waits.
 - Cons: the sort key depends on `now()`, so a plain index cannot serve it. The behavior is harder to
   predict and to explain.
 
-## Recommendation
+## Decision
 
 **Option B with weights 70/20/10.** It keeps high priority dominant, guarantees progress for low
 priority, and stays index-friendly. If time runs short, Option A is the fallback (it is in the plan's

@@ -1,7 +1,7 @@
 # ADR-0006: Batch semantics
 
-- Status: Proposed
-- Date: 2026-11-04
+- Status: Accepted
+- Date: 2026-11-04 (proposed), 2026-11-05 (accepted by the maintainer)
 
 ## Context
 
@@ -33,7 +33,7 @@ Store the valid items and report the invalid ones. Respond with a per-item resul
 - Pros: the fastest response.
 - Cons: the client only learns about errors by polling. More states and more code.
 
-## Recommendation
+## Decision
 
 **Option A.**
 

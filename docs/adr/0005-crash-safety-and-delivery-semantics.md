@@ -1,7 +1,7 @@
 # ADR-0005: Crash safety and delivery semantics
 
-- Status: Proposed
-- Date: 2026-11-04
+- Status: Accepted
+- Date: 2026-11-04 (proposed), 2026-11-05 (accepted by the maintainer)
 
 ## Context
 
@@ -37,7 +37,7 @@ rolls back on its own.
 - Cons: one database connection is held for each in-flight HTTP call (about 30 per channel, see
   ADR-0003). Long transactions also block vacuum. The connection pool becomes the bottleneck.
 
-## Recommendation
+## Decision
 
 **Option B.**
 

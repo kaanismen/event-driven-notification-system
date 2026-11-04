@@ -5,7 +5,7 @@ and the maintainer's review (30-45 minutes per phase).
 
 | Phase | Scope | Gate | Estimate |
 |-------|-------|------|----------|
-| 0 | Intake and design: requirements matrix, assumptions, ADR proposals, architecture, plan | Decisions chosen, docs approved | 1.5 h |
+| 0 | Intake and design: requirements matrix, assumptions, ADRs, architecture, plan | Decisions chosen, docs approved | 1.5 h |
 | 1 | Foundation: module layout, config, Docker Compose (app + Postgres), first migration, `/health`, JSON logging with request-ID middleware, Makefile, `.gitattributes` | `docker compose up` clean, `curl /health` returns 200 | 1.5 h |
 | 2 | Notification API: domain model, validation, create, batch, get by ID and batch ID, cancel, list with filters and cursor pagination, idempotency key | Every endpoint exercised with curl; handler and integration tests green | 2.5 h |
 | 3 | Processing engine: dispatchers, claim query, priority policy, per-channel rate limiter, provider client, status transitions, mock provider | A real notification reaches webhook.site and its status becomes `sent` | 2.5 h |

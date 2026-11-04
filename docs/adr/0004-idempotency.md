@@ -1,7 +1,7 @@
 # ADR-0004: Idempotency
 
-- Status: Proposed
-- Date: 2026-11-04
+- Status: Accepted
+- Date: 2026-11-04 (proposed), 2026-11-05 (accepted by the maintainer)
 
 ## Context
 
@@ -35,7 +35,7 @@ body and the ID of the created resource, in the same transaction as the insert.
 - Pros: covers every case.
 - Cons: two mechanisms to build, test and explain. Not justified for this scope.
 
-## Recommendation
+## Decision
 
 **Option A.**
 

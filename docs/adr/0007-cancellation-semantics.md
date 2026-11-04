@@ -1,7 +1,7 @@
 # ADR-0007: Cancellation semantics
 
-- Status: Proposed
-- Date: 2026-11-04
+- Status: Accepted
+- Date: 2026-11-04 (proposed), 2026-11-05 (accepted by the maintainer)
 
 ## Context
 
@@ -35,7 +35,7 @@ Set a `cancel_requested` flag that the worker checks just before the provider ca
 
 - Rejected: it would report `cancelled` for messages that were actually sent.
 
-## Recommendation
+## Decision
 
 **Option A.** It is simple, honest and race-free. The `processing` window is short (a claimed batch
 is about 200 ms of tokens plus one HTTP call). If that attempt fails with a transient error, the row

@@ -1,7 +1,7 @@
 # ADR-0002: Retry policy
 
-- Status: Proposed
-- Date: 2026-11-04
+- Status: Accepted
+- Date: 2026-11-04 (proposed), 2026-11-05 (accepted by the maintainer)
 
 ## Context
 
@@ -29,7 +29,7 @@ So the retry window should be minutes, not hours.
 3. **Exponential with full jitter (recommended)**: `delay = random(0, min(cap, base * 2^(attempt-1)))`.
    Spreads retries out and is the well-known pattern from the AWS architecture guidance.
 
-## Recommendation
+## Decision
 
 - Persisted retries with exponential backoff and full jitter.
 - Defaults (environment variables): `base = 2s`, `cap = 5m`, `max_attempts = 8` in total. The upper

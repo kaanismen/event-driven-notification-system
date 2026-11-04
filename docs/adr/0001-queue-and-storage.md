@@ -1,7 +1,7 @@
 # ADR-0001: Queue and storage
 
-- Status: Proposed
-- Date: 2026-11-04
+- Status: Accepted
+- Date: 2026-11-04 (proposed), 2026-11-05 (accepted by the maintainer)
 
 ## Context
 
@@ -46,7 +46,7 @@ claim due rows with `SKIP LOCKED`, so concurrent workers never block on or take 
 Kafka was considered and rejected: it has no per-message priority and no per-message delay, and it
 is heavy for this scale.
 
-## Recommendation
+## Decision
 
 **Option A.** It meets the scale with a wide margin, removes a whole class of consistency bugs, and
 keeps the setup to one command and two containers.
