@@ -1,0 +1,28 @@
+version: "2"
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - bodyclose   # unclosed HTTP response bodies leak connections (provider client, Phase 3)
+    - errorlint   # error comparisons that break with wrapped errors
+    - gosec       # common security mistakes
+    - misspell
+    - noctx       # HTTP requests or queries without a context.Context
+    - unconvert
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      # Tests may use simpler error handling and fixed inputs.
+      - path: _test\.go
+        linters: [gosec, noctx]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kaanismen/insider-assessment
