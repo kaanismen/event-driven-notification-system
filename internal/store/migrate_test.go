@@ -47,6 +47,9 @@ func TestOpenDoesNotLeakPassword(t *testing.T) {
 	}
 }
 
+// schemaTables lists every table the migrations create.
+var schemaTables = []string{"notifications", "idempotency_keys"}
+
 func TestMigrationsUpDownUp(t *testing.T) {
 	dbURL := testdb.New(t)
 	ctx := context.Background()
@@ -65,8 +68,10 @@ func TestMigrationsUpDownUp(t *testing.T) {
 	}
 	defer pool.Close()
 
-	if !tableExists(t, pool, "notifications") {
-		t.Fatal("notifications table missing after up")
+	for _, table := range schemaTables {
+		if !tableExists(t, pool, table) {
+			t.Fatalf("%s table missing after up", table)
+		}
 	}
 	assertConstraints(t, pool)
 
@@ -79,15 +84,19 @@ func TestMigrationsUpDownUp(t *testing.T) {
 	}
 	closeMigrator(m, discardLogger())
 
-	if tableExists(t, pool, "notifications") {
-		t.Fatal("notifications table still exists after down")
+	for _, table := range schemaTables {
+		if tableExists(t, pool, table) {
+			t.Fatalf("%s table still exists after down", table)
+		}
 	}
 
 	if err := Migrate(dbURL, discardLogger()); err != nil {
 		t.Fatalf("Migrate after down: %v", err)
 	}
-	if !tableExists(t, pool, "notifications") {
-		t.Fatal("notifications table missing after second up")
+	for _, table := range schemaTables {
+		if !tableExists(t, pool, table) {
+			t.Fatalf("%s table missing after second up", table)
+		}
 	}
 }
 
