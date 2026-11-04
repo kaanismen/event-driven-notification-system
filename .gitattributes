@@ -1,0 +1,7 @@
+# Store and check out text files with LF on every OS, so shell scripts, SQL and Go
+# files behave the same in Docker, CI and on Windows.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pdf binary
