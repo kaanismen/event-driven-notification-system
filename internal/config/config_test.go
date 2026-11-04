@@ -25,6 +25,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ShutdownTimeout != 15*time.Second {
 		t.Errorf("ShutdownTimeout = %v, want 15s", cfg.ShutdownTimeout)
 	}
+	if cfg.MaxAttempts != 8 {
+		t.Errorf("MaxAttempts = %d, want 8", cfg.MaxAttempts)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -33,11 +36,13 @@ func TestLoadOverrides(t *testing.T) {
 		"HTTP_ADDR":        ":9090",
 		"LOG_LEVEL":        "debug",
 		"SHUTDOWN_TIMEOUT": "3s",
+		"MAX_ATTEMPTS":     "3",
 	}))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.HTTPAddr != ":9090" || cfg.LogLevel != slog.LevelDebug || cfg.ShutdownTimeout != 3*time.Second {
+	if cfg.HTTPAddr != ":9090" || cfg.LogLevel != slog.LevelDebug || cfg.ShutdownTimeout != 3*time.Second ||
+		cfg.MaxAttempts != 3 {
 		t.Errorf("unexpected config: %+v", cfg)
 	}
 }
@@ -58,8 +63,17 @@ func TestLoadReportsAllErrors(t *testing.T) {
 			env: map[string]string{
 				"LOG_LEVEL":        "loud",
 				"SHUTDOWN_TIMEOUT": "soon",
+				"MAX_ATTEMPTS":     "many",
 			},
-			wantErr: []string{"DATABASE_URL", "LOG_LEVEL", "SHUTDOWN_TIMEOUT"},
+			wantErr: []string{"DATABASE_URL", "LOG_LEVEL", "SHUTDOWN_TIMEOUT", "MAX_ATTEMPTS"},
+		},
+		{
+			name: "max attempts out of range",
+			env: map[string]string{
+				"DATABASE_URL": "postgres://localhost/db",
+				"MAX_ATTEMPTS": "0",
+			},
+			wantErr: []string{"between 1 and 20"},
 		},
 		{
 			name: "non-positive timeout",
