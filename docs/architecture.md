@@ -94,18 +94,22 @@ stateDiagram-v2
 
 Main index: a partial index on `(channel, priority, next_attempt_at) WHERE status = 'pending'`, so
 the claim query only touches due rows and stays fast however many finished rows exist.
+A second partial index on `(channel, locked_until) WHERE status = 'processing'` serves the
+lease-recovery half of the claim (rows whose worker crashed). Migration `000001` is the source of truth.
 
 ## Package layout
 
 ```
 cmd/notifier/          main: wiring, config, signal handling, graceful shutdown
 internal/config/       environment variables to a typed Config struct
+internal/logging/      JSON logger; request ID carried through context.Context
 internal/notification/ domain types, validation, status transitions (no I/O)
 internal/store/        PostgreSQL access: CRUD, claim, complete, queue depth
 internal/httpapi/      handlers, middleware, JSON helpers
 internal/worker/       dispatchers, rate limiting, retry policy
 internal/provider/     HTTP client for the provider + mock provider server
-migrations/            versioned SQL migrations (golang-migrate)
+migrations/            versioned SQL migrations (golang-migrate), embedded in the binary
+internal/testdb/       test helper: one fresh database per integration test
 ```
 
 Interfaces exist only at real boundaries: the store (so handlers can be tested with a fake), the

@@ -50,7 +50,7 @@ will write. Status is updated at the end of each phase.
 | DR-05 | Recover messages held by a crashed worker (lease / visibility timeout) | 4 | I | Claimed row with an expired lease is claimed again and delivered | Planned |
 | DR-06 | Retries go through the same rate limiter as first attempts | 4 | F | Flaky provider under load still respects PE-02 | Planned |
 | DR-07 | Bound every provider call with a timeout | 3, 4 | F | Slow provider causes a timeout and a retry, not a stuck worker | Planned |
-| DR-08 | Shut down gracefully: stop claiming, finish or release in-flight work | 1, 4 | I | After shutdown no row stays in `processing` with a live lease | Planned |
+| DR-08 | Shut down gracefully: stop claiming, finish or release in-flight work | 1, 4 | I | After shutdown no row stays in `processing` with a live lease | Phase 1 part done |
 
 ## 4. Observability
 
@@ -59,9 +59,9 @@ will write. Status is updated at the end of each phase.
 | OBS-01 | Metrics endpoint exposing queue depth | 5 | I, E | Depth per channel/priority matches the database during a load run | Planned |
 | OBS-02 | Metrics for delivery success and failure rates | 5 | F, E | Counters move as the mock provider succeeds and fails | Planned |
 | OBS-03 | Metrics for latency (provider call and end-to-end) | 5 | E | Histogram/summary values change under load | Planned |
-| OBS-04 | Structured (JSON) logs | 1 | U | Log line is valid JSON with level, message and context fields | Planned |
-| OBS-05 | Correlation ID on every request, carried into worker logs for the same notification | 1, 3 | H, I | Incoming `X-Request-ID` is echoed and logged; worker log for that notification carries it | Planned |
-| OBS-06 | Health check endpoint (liveness; readiness checks the database) | 1, 5 | H, E | `/health` returns 200; readiness returns 503 when the database is down | Planned |
+| OBS-04 | Structured (JSON) logs | 1 | U | Log line is valid JSON with level, message and context fields | Done |
+| OBS-05 | Correlation ID on every request, carried into worker logs for the same notification | 1, 3 | H, I | Incoming `X-Request-ID` is echoed and logged; worker log for that notification carries it | Phase 1 part done |
+| OBS-06 | Health check endpoint (liveness; readiness checks the database) | 1, 5 | H, E | `/health` returns 200; readiness returns 503 when the database is down | Phase 1 part done |
 
 ## 5. Non-functional expectations (from the overview and business context)
 
@@ -71,7 +71,7 @@ will write. Status is updated at the end of each phase.
 | NFR-02 | Absorb traffic bursts without dropping requests | 3, 5 | E | Large batch is accepted quickly; queue drains at the rate limit | Planned |
 | NFR-03 | Reliable delivery (no silent loss) | 4 | I, F | At-least-once semantics per ADR-0005 | Planned |
 | NFR-04 | Status visible to API consumers and internal teams | 2, 5 | H, E | Status endpoints plus metrics and logs | Planned |
-| NFR-05 | Implemented in Go 1.2x | 1 | D | `go.mod` Go version | Planned |
+| NFR-05 | Implemented in Go 1.2x | 1 | D | `go.mod` Go version | Done |
 
 ## 6. Deliverables
 
@@ -79,10 +79,10 @@ will write. Status is updated at the end of each phase.
 |----|---------------------------|-------|------|----------|--------|
 | DEL-01 | Public Git repository with a clean, readable commit history | all | D | Conventional Commits, one logical change per commit | In progress |
 | DEL-02 | README with setup steps, architecture overview and API examples | 6 | D | README review from a fresh clone | Planned |
-| DEL-03 | One-command local setup with Docker Compose | 1, 6 | E | `docker compose up` on a clean clone starts app + Postgres | Planned |
+| DEL-03 | One-command local setup with Docker Compose | 1, 6 | E | `docker compose up` on a clean clone starts app + Postgres | Phase 1 part done |
 | DEL-04 | API documentation as an OpenAPI (Swagger) specification | 6 | D | `/openapi.yaml` served and matches the handlers | Planned |
-| DEL-05 | Versioned database migrations | 1+ | I | Migrations apply up and down cleanly in the test run | Planned |
-| DEL-06 | Test suite runnable with a single command | 1, 6 | E, D | `make test` green locally and in CI | Planned |
+| DEL-05 | Versioned database migrations | 1+ | I | Migrations apply up and down cleanly in the test run | Phase 1 part done |
+| DEL-06 | Test suite runnable with a single command | 1, 6 | E, D | `make test` green locally and in CI | Phase 1 part done |
 
 ## 7. Optional bonus features
 
