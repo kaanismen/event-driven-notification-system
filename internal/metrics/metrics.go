@@ -38,6 +38,12 @@ const (
 	ReleaseBreaker  = "breaker_open"
 )
 
+// Reasons a real-time subscriber was disconnected by the server (ADR-0020).
+const (
+	SubscriberSlow   = "slow"   // its buffer filled up: it was not reading fast enough
+	SubscriberResync = "resync" // the database listener reconnected and events may be missing
+)
+
 // Metrics holds every metric the service records. It is safe for concurrent use.
 type Metrics struct {
 	registry *prometheus.Registry
@@ -47,6 +53,8 @@ type Metrics struct {
 	deliveryLatency  *prometheus.HistogramVec
 	breakerState     *prometheus.GaugeVec
 	releases         *prometheus.CounterVec
+	subscribers      prometheus.Gauge
+	subscribersEnded *prometheus.CounterVec
 }
 
 // New creates the metrics and registers them, together with the Go runtime and process
@@ -78,9 +86,18 @@ func New() *Metrics {
 			Name: "notifier_released_total",
 			Help: "Claimed rows handed back to the queue unsent, with their attempt given back.",
 		}, []string{"channel", "reason"}),
+		subscribers: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "notifier_event_subscribers",
+			Help: "Open real-time status connections on this instance (ADR-0020).",
+		}),
+		subscribersEnded: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "notifier_event_subscribers_dropped_total",
+			Help: "Real-time connections closed by the server: slow (could not keep up) or resync (events may have been missed).",
+		}, []string{"reason"}),
 	}
 	m.registry.MustRegister(
 		m.deliveries, m.providerDuration, m.deliveryLatency, m.breakerState, m.releases,
+		m.subscribers, m.subscribersEnded,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -110,6 +127,16 @@ func (m *Metrics) BreakerState(ch notification.Channel, state int) {
 // Released counts a row handed back unsent.
 func (m *Metrics) Released(ch notification.Channel, reason string) {
 	m.releases.WithLabelValues(string(ch), reason).Inc()
+}
+
+// Subscribers adds delta to the number of open real-time connections.
+func (m *Metrics) Subscribers(delta int) {
+	m.subscribers.Add(float64(delta))
+}
+
+// SubscriberDropped counts a real-time connection the server closed, by reason.
+func (m *Metrics) SubscriberDropped(reason string) {
+	m.subscribersEnded.WithLabelValues(reason).Inc()
 }
 
 // QueueDepthReader reads the current queue size from the database.
