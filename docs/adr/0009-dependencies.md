@@ -20,10 +20,11 @@ For each need, the alternative was to write the code ourselves on top of the sta
 | UUIDs | `github.com/google/uuid` | 16 random bytes formatted by hand | Small, widely used, no transitive dependencies; also parses and validates IDs from requests (Phase 2). |
 | Token bucket rate limiter (Phase 3) | `golang.org/x/time/rate` | A hand-written token bucket | Maintained by the Go team, safe for concurrent use, and `Wait(ctx)` honours cancellation. It paces sends; the exact per-second ceiling on top of it is our own small window cap (ADR-0003 amendment). |
 | Metrics in the Prometheus format (Phase 5) | `github.com/prometheus/client_golang` | Writing the Prometheus text format by hand on the standard library | The format most monitoring systems collect. It handles counters, histograms, concurrency and the exposition format correctly, and adds Go runtime and process metrics. It brings a few modules with it (`prometheus/common`, `client_model`, `procfs`, `protobuf`); accepted because metrics are a solved problem and less of our own code means less to get wrong (ADR-0016). |
+| WebSocket server and client (Phase 6c) | `github.com/coder/websocket` | `golang.org/x/net/websocket`, or the protocol by hand | The standard library has no WebSocket implementation, and `x/net/websocket` lacks close codes and pings done right. This library is small, maintained, takes a `context.Context` everywhere and has no dependencies of its own (ADR-0020). |
 
 ## Decision
 
-Use the five libraries above. Only the packages we import are compiled into the binary. For
+Use the libraries above (five at first; the sixth, `coder/websocket`, was added in Phase 6c). Only the packages we import are compiled into the binary. For
 golang-migrate that is the core package, the `iofs` source and the `pgx/v5` database driver, not
 its other database drivers.
 

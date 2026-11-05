@@ -4,7 +4,8 @@ A notification service in Go that accepts SMS, email and push notifications over
 and delivers them asynchronously through an external provider. It is built for bursts:
 the API stores work and answers at once, while workers drain the queue at a fixed rate of 100
 messages per second per channel, with priorities, retries, a dead-letter state, a circuit
-breaker per channel, scheduled sends, message templates and Prometheus metrics.
+breaker per channel, scheduled sends, message templates, real-time status over WebSocket and
+Prometheus metrics.
 
 PostgreSQL is both the source of truth and the queue, so the whole system is one Go binary and
 one database.
@@ -149,6 +150,20 @@ curl 'localhost:8080/v1/notifications?status=failed&channel=email&from=2026-11-0
 # {"items":[...],"nextCursor":"MjAyNi0xMS0wNVQ..."}
 ```
 
+**Watch in real time.** `GET /v1/notifications/{id}/events` and `GET /v1/batches/{id}/events`
+are WebSocket endpoints. They send the current state first, then every status change as it
+commits, and close normally once everything is final. curl cannot speak WebSocket, so the repo
+has a small client:
+
+```sh
+go run ./cmd/watch -batch 01a1ada6-7501-7b18-8ba4-dab87deaca26
+# snapshot  1000 items  pending=880 processing=64 sent=56
+#    0.51s  pending=840 processing=53 sent=107
+#    ...
+#    9.53s  sent=1000
+# closed by server: 1000 all notifications are final
+```
+
 **Cancel** a notification that is still `pending` (including one waiting for a retry or its
 scheduled time). Anything else returns `409` with the current status.
 
@@ -202,6 +217,12 @@ How a notification moves through the system:
    On a normal shutdown, claimed but unsent rows are handed back immediately, with their attempt
    returned.
 
+**Real-time status.** A database trigger announces every status change with `NOTIFY` when it
+commits. Each instance `LISTEN`s on one dedicated connection and forwards the change to the
+WebSocket clients watching that notification or batch, so it works whichever instance or
+worker made the change. Clients always start from a snapshot, and a version number on each
+row keeps the stream from ever going backwards (ADR-0020).
+
 Retries and scheduled sends need no extra machinery: both are rows with a future
 `next_attempt_at`, which the claim does not see until that time. If a provider fails 10 times in a
 row, that channel's circuit breaker stops sending for 30 seconds, then lets one probe message test
@@ -227,7 +248,7 @@ points in the brief, and the assumptions made about them, are in
 | Batches | All-or-nothing, errors reported per item index | [0006](docs/adr/0006-batch-semantics.md) |
 | Cancellation | Only `pending` can be cancelled; in-flight sends are not interrupted | [0007](docs/adr/0007-cancellation-semantics.md) |
 | Priority | Weighted 70/20/10 instead of strict priority, to avoid starvation | [0008](docs/adr/0008-priority-scheduling.md) |
-| Dependencies | Five libraries: pgx, golang-migrate, uuid, x/time/rate, Prometheus client | [0009](docs/adr/0009-dependencies.md) |
+| Dependencies | Six libraries: pgx, golang-migrate, uuid, x/time/rate, Prometheus client, coder/websocket | [0009](docs/adr/0009-dependencies.md) |
 | Test database | A Compose-managed Postgres, one fresh database per test | [0010](docs/adr/0010-test-database.md) |
 | Migrations | Embedded in the binary and applied at startup | [0011](docs/adr/0011-migrations-at-startup.md) |
 | API semantics | `200` for replays, cursor pagination without totals, unknown fields rejected | [0012](docs/adr/0012-api-response-semantics.md) |
@@ -238,6 +259,7 @@ points in the brief, and the assumptions made about them, are in
 | Scheduling | Optional `scheduledAt`, stored as the first `next_attempt_at` | [0017](docs/adr/0017-scheduled-notifications.md) |
 | Docs and CI | Hand-written OpenAPI checked against the routes; GitHub Actions | [0018](docs/adr/0018-api-documentation-and-ci.md) |
 | Templates | Immutable templates with strict `{{name}}` placeholders, rendered when the request arrives | [0019](docs/adr/0019-message-templates.md) |
+| Real-time status | WebSocket per notification or batch, fed by a Postgres trigger through LISTEN/NOTIFY | [0020](docs/adr/0020-real-time-status.md) |
 
 ## Operations
 
@@ -274,6 +296,7 @@ Invalid values stop the app at startup with a clear error rather than falling ba
 | `notifier_delivery_latency_seconds{channel}` | End-to-end time from creation to `sent` |
 | `notifier_circuit_breaker_state{channel}` | 0 closed, 1 open, 2 half-open |
 | `notifier_released_total{channel,reason}` | Claimed rows handed back unsent (shutdown or breaker) |
+| `notifier_event_subscribers`, `notifier_event_subscribers_dropped_total{reason}` | Open real-time connections, and those closed for being slow or for a resync |
 
 For example, the failure rate over five minutes is
 `sum(rate(notifier_deliveries_total{outcome="failed"}[5m])) / sum(rate(notifier_deliveries_total[5m]))`.
@@ -358,6 +381,8 @@ These are deliberate trade-offs for the assessment's scope, each discussed in an
   partition the table by creation time and drop old partitions.
 - **SMS is one segment** of up to 160 characters, counted as Unicode characters; multipart SMS
   and GSM-7/UCS-2 encoding rules are out of scope (A-07).
+- **Real-time events are best effort.** They are not stored or replayed; a client that
+  reconnects gets a fresh snapshot and may miss intermediate steps (A-45).
 - **Scaling out is designed, not demonstrated.** Compose runs one instance; the claim query is
   safe with many (A-21).
 

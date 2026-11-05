@@ -16,6 +16,7 @@ flowchart LR
     subgraph App["notifier (one Go binary)"]
         API["HTTP API<br/>net/http + middleware<br/>(request ID, logging, recovery)"]
         Obs["/metrics (Prometheus)<br/>/livez, /readyz"]
+        RT["Real-time status<br/>WebSocket + event hub"]
         subgraph Engine["Worker engine"]
             DS["SMS dispatcher<br/>+ circuit breaker"] --> LS["token bucket + window cap<br/>100/s"]
             DE["Email dispatcher<br/>+ circuit breaker"] --> LE["token bucket + window cap<br/>100/s"]
@@ -34,6 +35,8 @@ flowchart LR
     PC -->|POST JSON| Prov["webhook.site<br/>(or mock provider in tests)"]
     PC -->|sent / retry later / failed| DB
     Obs -->|queue depth| DB
+    DB -.->|NOTIFY on status change| RT
+    RT -->|snapshot + events| Client
 ```
 
 ## Notification lifecycle
@@ -106,6 +109,9 @@ stateDiagram-v2
 
 `idempotency_keys`: `key` (primary key), `request_hash`, `resource_type`, `resource_id`, `created_at`.
 
+`notifications.version` (migration `000005`) counts the updates of a row; a trigger bumps it and
+announces status changes with NOTIFY (ADR-0020).
+
 `templates` (migration `000004`): `id`, `name` (unique), `channel`, `body`, `created_at`. Rows are
 never updated or deleted. `notifications.template_id` references the template a row was rendered
 from.
@@ -128,6 +134,8 @@ internal/store/        PostgreSQL access: CRUD, claim, complete, queue depth
 internal/httpapi/      handlers, middleware, health checks, JSON helpers
 internal/worker/       dispatchers, rate limiting, retry policy, circuit breaker
 internal/metrics/      Prometheus registry and the service's metrics (ADR-0016)
+internal/events/       LISTEN for status changes and fan them out to subscribers (ADR-0020)
+cmd/watch/             command-line client for the real-time status endpoints
 internal/provider/     HTTP client for the provider + mock provider server
 migrations/            versioned SQL migrations (golang-migrate), embedded in the binary
 internal/testdb/       test helper: one fresh database per integration test

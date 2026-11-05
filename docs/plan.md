@@ -15,6 +15,7 @@ and the maintainer's review (30-45 minutes per phase).
 | 5b | Bonus: scheduled notifications (ADR-0017) | A scheduled message is not sent before its time | 1.5 h |
 | 6 | Delivery: OpenAPI spec served at `/openapi.yaml`, README with Mermaid diagram, decisions and limitations, GitHub Actions (test + lint), clean-clone check | Fresh clone: `docker compose up` and `make test` green | 2.0 h |
 | 6b | Bonus: message templates (ADR-0019) | A templated notification is rendered, validated and delivered | 3.0 h |
+| 6c | Bonus: real-time status over WebSocket (ADR-0020) | A 1000-item batch is watched live until every item is final | 4.0 h |
 | **Total** | | | **14.0 h** planned for phases 0-6; 4b and 5b were added later |
 
 ## Decisions deferred to later phases

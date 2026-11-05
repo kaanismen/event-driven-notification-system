@@ -91,6 +91,6 @@ will write. Status is updated at the end of each phase.
 | BON-01 | Failure handling | Dead-letter state is part of the core design (DR-04), done in Phase 4. Circuit breaker per channel done in Phase 4b (ADR-0015): an outage test shows it saving attempts. | 4, 4b | U, F |
 | BON-02 | Scheduled notifications (send at a future time) | Done in Phase 5b (ADR-0017): optional `scheduledAt` on create and batch items, stored in `next_attempt_at`; the engine test shows a message is not sent before its time. | 5b | U, I |
 | BON-03 | Message templates with variables | Done in Phase 6b (ADR-0019): immutable templates with strict `{{name}}` placeholders, rendered when the request arrives; handler, store and smoke tests | 6b | U, H, I, E |
-| BON-04 | Real-time status via WebSocket | Out of scope unless requested | - | - |
+| BON-04 | Real-time status via WebSocket | Done in Phase 6c (ADR-0020): `/events` endpoints for a notification and a batch, fed by a Postgres trigger with LISTEN/NOTIFY; hub, listener (including reconnect) and handler tests; live demo with `cmd/watch` | 6c | U, H, I, E |
 | BON-05 | Distributed tracing | Out of scope; correlation IDs are the lightweight substitute | - | - |
 | BON-06 | CI pipeline (tests + lint) on GitHub Actions | Done in Phase 6 (ADR-0018): lint, race-enabled tests, OpenAPI lint and an end-to-end smoke run | 6 | D |
