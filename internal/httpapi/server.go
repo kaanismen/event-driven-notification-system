@@ -12,6 +12,7 @@ import (
 
 	// Aliased because this package already has a type named api.
 	openapi "github.com/kaanismen/event-driven-notification-system/api"
+	"github.com/kaanismen/event-driven-notification-system/internal/events"
 	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 	"github.com/kaanismen/event-driven-notification-system/internal/store"
 )
@@ -45,6 +46,9 @@ type Deps struct {
 	Ready func(ctx context.Context) error
 	// Metrics serves GET /metrics.
 	Metrics http.Handler
+	// Events delivers status changes to WebSocket subscribers (ADR-0020). It is the
+	// in-memory hub, not an interface: tests use a real hub and publish to it.
+	Events *events.Hub
 }
 
 // api holds the dependencies shared by all handlers.
@@ -54,13 +58,14 @@ type api struct {
 	maxAttempts      int
 	maxScheduleAhead time.Duration
 	ready            func(ctx context.Context) error
+	events           *events.Hub
 }
 
 // NewHandler returns the root handler with every route and middleware attached.
 func NewHandler(d Deps) http.Handler {
 	a := &api{
 		logger: d.Logger, store: d.Store, maxAttempts: d.MaxAttempts,
-		maxScheduleAhead: d.MaxScheduleAhead, ready: d.Ready,
+		maxScheduleAhead: d.MaxScheduleAhead, ready: d.Ready, events: d.Events,
 	}
 
 	mux := http.NewServeMux()
@@ -99,8 +104,10 @@ func (a *api) routes(metrics http.Handler) []route {
 		{"GET /v1/notifications", http.HandlerFunc(a.listNotifications)},
 		{"GET /v1/notifications/{id}", http.HandlerFunc(a.getNotification)},
 		{"POST /v1/notifications/{id}/cancel", http.HandlerFunc(a.cancelNotification)},
+		{"GET /v1/notifications/{id}/events", http.HandlerFunc(a.notificationEvents)},
 		{"POST /v1/batches", http.HandlerFunc(a.createBatch)},
 		{"GET /v1/batches/{id}", http.HandlerFunc(a.getBatch)},
+		{"GET /v1/batches/{id}/events", http.HandlerFunc(a.batchEvents)},
 		{"POST /v1/templates", http.HandlerFunc(a.createTemplate)},
 		{"GET /v1/templates", http.HandlerFunc(a.listTemplates)},
 		{"GET /v1/templates/{id}", http.HandlerFunc(a.getTemplate)},

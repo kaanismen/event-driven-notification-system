@@ -151,6 +151,7 @@ type notificationResponse struct {
 	NextAttemptAt     *time.Time `json:"nextAttemptAt,omitempty"`
 	ScheduledAt       *time.Time `json:"scheduledAt,omitempty"`
 	TemplateID        string     `json:"templateId,omitempty"`
+	Version           int64      `json:"version"`
 	LastError         string     `json:"lastError,omitempty"`
 	ProviderMessageID string     `json:"providerMessageId,omitempty"`
 	CorrelationID     string     `json:"correlationId,omitempty"`
@@ -176,6 +177,7 @@ func toResponse(n notification.Notification) notificationResponse {
 		UpdatedAt:         n.UpdatedAt,
 		SentAt:            n.SentAt,
 		ScheduledAt:       n.ScheduledAt,
+		Version:           n.Version,
 	}
 	if n.BatchID != nil {
 		resp.BatchID = n.BatchID.String()
@@ -362,7 +364,12 @@ func (a *api) getBatch(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
+	writeJSON(w, http.StatusOK, toBatchStatus(id, items))
+}
 
+// toBatchStatus builds the batch summary, also used as the snapshot of a batch's event
+// stream.
+func toBatchStatus(id uuid.UUID, items []notification.Notification) batchStatusResponse {
 	resp := batchStatusResponse{
 		BatchID:       id.String(),
 		Total:         len(items),
@@ -377,7 +384,7 @@ func (a *api) getBatch(w http.ResponseWriter, r *http.Request) {
 		resp.Counts[n.Status]++
 		resp.Notifications[i] = toResponse(n)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 // cancelNotification handles POST /v1/notifications/{id}/cancel (ADR-0007).

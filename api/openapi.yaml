@@ -108,6 +108,7 @@ paths:
                 status: pending
                 attempts: 0
                 maxAttempts: 8
+                version: 0
                 nextAttemptAt: '2026-11-05T21:14:03.120456Z'
                 correlationId: 3f6c1a52-8d0e-4b7a-a1f2-9c8d7e6b5a40
                 createdAt: '2026-11-05T21:14:03.120456Z'
@@ -261,6 +262,50 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/notifications/{id}/events:
+    get:
+      tags: [Notifications]
+      operationId: notificationEvents
+      summary: Watch a notification's status in real time (WebSocket)
+      description: |
+        A WebSocket connection (`ws://`) that sends the current state first, then every
+        status change as it happens, so clients do not need to poll. Messages are JSON text
+        frames:
+
+        1. One `EventSnapshot` (`"type": "snapshot"`) with the full current state.
+        2. A `StatusEvent` (`"type": "status"`) for each later change, in commit order.
+           Events carry a `version` that only grows; anything not newer than the snapshot is
+           not sent.
+
+        The server closes the connection with one of these codes:
+
+        - `1000`: every watched notification is final (`sent`, `failed` or `cancelled`).
+          Already final at connect time: the snapshot is sent, then the connection closes.
+        - `1001`: the server is shutting down.
+        - `1008`: the client read too slowly and fell behind. Reconnect for a new snapshot.
+        - `1012`: the server lost its event feed briefly and events may be missing.
+          Reconnect for a new snapshot.
+
+        Errors before the upgrade (bad ID, unknown ID, events unavailable) are ordinary JSON
+        responses. Browsers can only connect from the same origin. The server sends a ping
+        every 30 seconds and never expects messages from the client.
+      parameters:
+        - $ref: '#/components/parameters/NotificationID'
+        - $ref: '#/components/parameters/RequestID'
+      responses:
+        '101':
+          $ref: '#/components/responses/EventStream'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+        '503':
+          $ref: '#/components/responses/EventsUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /v1/batches:
     post:
       tags: [Batches]
@@ -384,6 +429,59 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/batches/{id}/events:
+    get:
+      tags: [Batches]
+      operationId: batchEvents
+      summary: Watch a batch's statuses in real time (WebSocket)
+      description: |
+        A WebSocket connection (`ws://`) that sends the current state first, then every
+        status change as it happens, so clients do not need to poll. Messages are JSON text
+        frames:
+
+        1. One `EventSnapshot` (`"type": "snapshot"`) with the full current state.
+        2. A `StatusEvent` (`"type": "status"`) for each later change, in commit order.
+           Events carry a `version` that only grows; anything not newer than the snapshot is
+           not sent.
+
+        The server closes the connection with one of these codes:
+
+        - `1000`: every watched notification is final (`sent`, `failed` or `cancelled`).
+          Already final at connect time: the snapshot is sent, then the connection closes.
+        - `1001`: the server is shutting down.
+        - `1008`: the client read too slowly and fell behind. Reconnect for a new snapshot.
+        - `1012`: the server lost its event feed briefly and events may be missing.
+          Reconnect for a new snapshot.
+
+        Errors before the upgrade (bad ID, unknown ID, events unavailable) are ordinary JSON
+        responses. Browsers can only connect from the same origin. The server sends a ping
+        every 30 seconds and never expects messages from the client.
+
+        For a batch, the snapshot is the same document as `GET /v1/batches/{id}`, and the
+        connection closes with `1000` once every item is final.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The `batchId` returned when the batch was created.
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/RequestID'
+      responses:
+        '101':
+          $ref: '#/components/responses/EventStream'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+        '503':
+          $ref: '#/components/responses/EventsUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -777,6 +875,46 @@ components:
           example:
             error: internal_error
             message: internal server error
+    EventStream:
+      description: |
+        Switching Protocols: the connection is now a WebSocket. Each message is a JSON text
+        frame, either an `EventSnapshot` (first) or a `StatusEvent`.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/EventSnapshot'
+              - $ref: '#/components/schemas/StatusEvent'
+    UpgradeRequired:
+      description: A plain HTTP request to a WebSocket endpoint.
+      headers:
+        Upgrade:
+          description: Always `websocket`.
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: upgrade_required
+            message: this endpoint is a WebSocket; connect with a WebSocket client
+    EventsUnavailable:
+      description: |
+        The server's event feed is reconnecting or the server is shutting down. Retry
+        shortly, or fall back to polling the status endpoints.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: events_unavailable
+            message: real-time events are temporarily unavailable; retry shortly or poll the status endpoints
     Healthy:
       description: The check passed.
       content:
@@ -856,7 +994,7 @@ components:
 
     Notification:
       type: object
-      required: [id, channel, recipient, content, priority, status, attempts, maxAttempts, createdAt, updatedAt]
+      required: [id, channel, recipient, content, priority, status, attempts, maxAttempts, version, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -895,6 +1033,10 @@ components:
           type: string
           format: uuid
           description: The template `content` was rendered from, if any.
+        version:
+          type: integer
+          format: int64
+          description: Grows by one with every change to the notification. Real-time events use it to order changes.
         lastError:
           type: string
           description: The last provider error (status code and the start of the response), if any.
@@ -990,6 +1132,55 @@ components:
           items:
             $ref: '#/components/schemas/Notification'
 
+    EventSnapshot:
+      type: object
+      description: The first message on a status connection. Exactly one of `notification` and `batch` is present.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [snapshot]
+        notification:
+          $ref: '#/components/schemas/Notification'
+        batch:
+          $ref: '#/components/schemas/BatchStatus'
+
+    StatusEvent:
+      type: object
+      description: One status change of one notification.
+      required: [type, id, status, attempts, version, updatedAt]
+      properties:
+        type:
+          type: string
+          enum: [status]
+        id:
+          type: string
+          format: uuid
+        batchId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/Status'
+        attempts:
+          type: integer
+        version:
+          type: integer
+          format: int64
+          description: Grows with every change of the notification; compare with `Notification.version`.
+        lastError:
+          type: string
+          description: The last provider error, if any (at most 1000 characters).
+        updatedAt:
+          type: string
+          format: date-time
+      example:
+        type: status
+        id: 019a5b6e-7c1d-7f3a-9b2e-4d5c6a7b8c9d
+        status: sent
+        attempts: 1
+        version: 2
+        updatedAt: '2026-11-06T09:00:01.204311Z'
+
     TemplateRequest:
       type: object
       additionalProperties: false
@@ -1072,6 +1263,8 @@ components:
             - idempotency_key_conflict
             - template_name_taken
             - not_cancellable
+            - upgrade_required
+            - events_unavailable
             - request_too_large
             - validation_failed
             - internal_error

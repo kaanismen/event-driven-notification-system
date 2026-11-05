@@ -14,7 +14,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/kaanismen/event-driven-notification-system/internal/events"
 	"github.com/kaanismen/event-driven-notification-system/internal/logging"
+	"github.com/kaanismen/event-driven-notification-system/internal/metrics"
 )
 
 func newTestHandler(t *testing.T) (http.Handler, *bytes.Buffer) {
@@ -130,7 +132,16 @@ func testDeps(logger *slog.Logger, st Store) Deps {
 		Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte("stub_metric 1\n"))
 		}),
+		Events: connectedHub(),
 	}
+}
+
+// connectedHub is a hub as it is while the database listener is connected; tests publish
+// events to it directly.
+func connectedHub() *events.Hub {
+	h := events.NewHub(metrics.New(), events.DefaultBuffer)
+	h.SetConnected(true)
+	return h
 }
 
 func TestLivenessAndHealthAlias(t *testing.T) {

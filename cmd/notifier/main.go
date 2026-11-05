@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kaanismen/event-driven-notification-system/internal/config"
+	"github.com/kaanismen/event-driven-notification-system/internal/events"
 	"github.com/kaanismen/event-driven-notification-system/internal/httpapi"
 	"github.com/kaanismen/event-driven-notification-system/internal/logging"
 	"github.com/kaanismen/event-driven-notification-system/internal/metrics"
@@ -71,6 +72,16 @@ func run() error {
 	// Only the host is logged: the full webhook.site URL works like a password.
 	logger.Info("delivery engine started", "provider_host", hostOf(cfg.ProviderURL))
 
+	// Real-time status (ADR-0020): one dedicated connection LISTENs for the trigger's
+	// events and the hub fans them out to WebSocket subscribers. The listener has its own
+	// context, cancelled only when run returns: if it stopped with the signal like the
+	// engine, open connections would be told "events missed, reconnect" (1012) instead of
+	// the "going away" (1001) that hub.Close sends when the HTTP server shuts down.
+	hub := events.NewHub(m, events.DefaultBuffer)
+	listenerCtx, stopListener := context.WithCancel(context.Background())
+	defer stopListener()
+	go events.NewListener(pool.Config().ConnConfig.Copy(), hub, logger).Run(listenerCtx)
+
 	// draining flips to true on the shutdown signal, so readiness fails before the
 	// listener closes (ADR-0016).
 	var draining atomic.Bool
@@ -90,7 +101,7 @@ func run() error {
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.NewHandler(httpapi.Deps{
 			Logger: logger, Store: st, MaxAttempts: cfg.MaxAttempts, MaxScheduleAhead: cfg.MaxScheduleAhead,
-			Ready: ready, Metrics: m.Handler(),
+			Ready: ready, Metrics: m.Handler(), Events: hub,
 		}),
 		// Explicit timeouts: the zero values mean "wait forever", which lets slow or idle
 		// clients hold connections open indefinitely.
@@ -100,6 +111,10 @@ func run() error {
 		IdleTimeout:       60 * time.Second,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
+
+	// Server.Shutdown neither waits for nor closes WebSocket connections, because they have
+	// been hijacked out of its control; closing the hub when shutdown starts ends them.
+	srv.RegisterOnShutdown(hub.Close)
 
 	// ListenAndServe blocks, so it runs in its own goroutine and reports back on a
 	// buffered channel; the buffer lets that goroutine exit even if nobody reads.

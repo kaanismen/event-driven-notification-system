@@ -8,3 +8,7 @@ api/openapi.yaml:
     - '#/paths/~1readyz/get/responses'
     - '#/paths/~1metrics/get/responses'
     - '#/paths/~1openapi.yaml/get/responses'
+  # A WebSocket handshake succeeds with 101 Switching Protocols, never with a 2xx.
+  operation-2xx-response:
+    - '#/paths/~1v1~1notifications~1{id}~1events/get/responses'
+    - '#/paths/~1v1~1batches~1{id}~1events/get/responses'

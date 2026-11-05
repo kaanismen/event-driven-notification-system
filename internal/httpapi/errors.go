@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/kaanismen/event-driven-notification-system/internal/events"
 	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 	"github.com/kaanismen/event-driven-notification-system/internal/store"
 )
@@ -69,6 +70,11 @@ func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, ae.status, ae.body)
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "no resource with this ID")
+	case errors.Is(err, events.ErrUnavailable):
+		// Temporary: the database listener is reconnecting or the server is stopping.
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusServiceUnavailable, "events_unavailable",
+			"real-time events are temporarily unavailable; retry shortly or poll the status endpoints")
 	case errors.Is(err, store.ErrTemplateNameTaken):
 		writeError(w, http.StatusConflict, "template_name_taken",
 			"a different template already has this name; templates cannot be changed, so choose a new name")
