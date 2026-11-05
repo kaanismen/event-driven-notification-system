@@ -40,8 +40,8 @@ flowchart LR
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending: created via API
-    pending --> processing: claimed by a worker (lease starts)
+    [*] --> pending: created via API (next_attempt_at = scheduledAt or now)
+    pending --> processing: claimed by a worker once due (lease starts)
     pending --> cancelled: cancel request
     processing --> sent: provider returned 2xx
     processing --> pending: transient error, next_attempt_at = now + backoff
@@ -59,11 +59,14 @@ stateDiagram-v2
 1. The middleware reads `X-Request-ID` or generates one, puts it in the request `context`, adds it
    to every log line and echoes it in the response.
 2. The handler decodes JSON with a body size limit and validates the content (required fields,
-   recipient format, per-channel length limit). Invalid input returns 422 with field errors.
+   recipient format, per-channel length limit, and an optional `scheduledAt` that is at most 1
+   minute in the past and at most `MAX_SCHEDULE_AHEAD` ahead). Invalid input returns 422 with
+   field errors.
 3. If an `Idempotency-Key` header is present and already known, the handler returns the original
    resource (or 409 if the body differs). See ADR-0004.
-4. One transaction inserts the row(s) with `status = pending` and `next_attempt_at = now()`, plus the
-   correlation ID so the worker can log under the same ID.
+4. One transaction inserts the row(s) with `status = pending` and `next_attempt_at = now()`, or the
+   requested `scheduled_at` (ADR-0017), plus the correlation ID so the worker can log under the
+   same ID. A scheduled row is not seen by the claim before its time.
 5. The API returns `202 Accepted` with the notification (or batch) ID. Delivery happens later.
 
 ## Worker flow (deliver)
@@ -96,7 +99,8 @@ stateDiagram-v2
 
 `notifications`: `id` (UUID), `batch_id` (nullable), `channel`, `recipient`, `content`, `priority`,
 `status`, `attempts`, `max_attempts`, `next_attempt_at`, `locked_until`, `last_error`,
-`provider_message_id`, `correlation_id`, `created_at`, `updated_at`, `sent_at`.
+`provider_message_id`, `correlation_id`, `created_at`, `updated_at`, `sent_at`, `scheduled_at`
+(nullable, migration `000003`).
 
 `idempotency_keys`: `key` (primary key), `request_hash`, `resource_type`, `resource_id`, `created_at`.
 

@@ -89,7 +89,7 @@ will write. Status is updated at the end of each phase.
 | ID | Bonus (paraphrased) | Plan | Phase | Test |
 |----|---------------------|------|-------|------|
 | BON-01 | Failure handling | Dead-letter state is part of the core design (DR-04), done in Phase 4. Circuit breaker per channel done in Phase 4b (ADR-0015): an outage test shows it saving attempts. | 4, 4b | U, F |
-| BON-02 | Scheduled notifications (send at a future time) | Only if ahead of schedule. Schema already supports it through `next_attempt_at`. | 4+ | I |
+| BON-02 | Scheduled notifications (send at a future time) | Done in Phase 5b (ADR-0017): optional `scheduledAt` on create and batch items, stored in `next_attempt_at`; the engine test shows a message is not sent before its time. | 5b | U, I |
 | BON-03 | Message templates with variables | Out of scope unless requested | - | - |
 | BON-04 | Real-time status via WebSocket | Out of scope unless requested | - | - |
 | BON-05 | Distributed tracing | Out of scope; correlation IDs are the lightweight substitute | - | - |
