@@ -55,6 +55,8 @@ an open design decision point to the ADR.
 | A-20 | Business effect of the rate limit | A burst of 1 million SMS takes about 2.8 hours to drain at 100/s. This is expected behavior, visible through the queue depth metric, not a bug. | Worth stating so reviewers see we understand the consequence. | Accepted |
 | A-21 | Deployment size | Docker Compose runs one app instance (API and workers in the same binary) and one Postgres. Horizontal scaling is described but not demonstrated. | One-command setup and limited time. | Accepted |
 | A-22 | "Real-time" metrics | Counters and latency are updated in process; queue depth is read from the database when the metrics endpoint is requested. | Always current; cheap with a partial index. | Accepted |
+| A-36 | Access to `/metrics` | No authentication, like the rest of the API (A-15). In production it would be served only on an internal port or network. | Consistent with the assessment's scope; the exposure is stated, not hidden. | Accepted |
+| A-37 | What queue depth counts | All `pending` rows, including retries scheduled for later, plus `processing` rows as a separate status. "Due now" is not reported separately; the retry counter shows retry activity. | One cheap grouped count; the difference is small in practice. | Accepted |
 
 ## Tooling
 

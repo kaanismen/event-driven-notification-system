@@ -56,21 +56,21 @@ will write. Status is updated at the end of each phase.
 
 | ID | Requirement (paraphrased) | Phase | Test | Evidence | Status |
 |----|---------------------------|-------|------|----------|--------|
-| OBS-01 | Metrics endpoint exposing queue depth | 5 | I, E | Depth per channel/priority matches the database during a load run | Planned |
-| OBS-02 | Metrics for delivery success and failure rates | 5 | F, E | Counters move as the mock provider succeeds and fails | Planned |
-| OBS-03 | Metrics for latency (provider call and end-to-end) | 5 | E | Histogram/summary values change under load | Planned |
+| OBS-01 | Metrics endpoint exposing queue depth | 5 | I, E | Depth per channel/priority matches the database during a load run | Done |
+| OBS-02 | Metrics for delivery success and failure rates | 5 | F, E | Counters move as the mock provider succeeds and fails | Done |
+| OBS-03 | Metrics for latency (provider call and end-to-end) | 5 | E | Histogram/summary values change under load | Done |
 | OBS-04 | Structured (JSON) logs | 1 | U | Log line is valid JSON with level, message and context fields | Done |
 | OBS-05 | Correlation ID on every request, carried into worker logs for the same notification | 1, 3 | H, I | Incoming `X-Request-ID` is echoed and logged; worker log for that notification carries it | Done |
-| OBS-06 | Health check endpoint (liveness; readiness checks the database) | 1, 5 | H, E | `/health` returns 200; readiness returns 503 when the database is down | Phase 1 part done |
+| OBS-06 | Health check endpoint (liveness; readiness checks the database) | 1, 5 | H, E | `/livez` (and `/health`) return 200; `/readyz` returns 503 when the database is down or the process is shutting down | Done |
 
 ## 5. Non-functional expectations (from the overview and business context)
 
 | ID | Expectation (paraphrased) | Phase | Test | Evidence | Status |
 |----|---------------------------|-------|------|----------|--------|
-| NFR-01 | Handle millions of notifications per day | 0, 5 | D, E | Capacity reasoning in ADR-0001; load script numbers in the README | Planned |
-| NFR-02 | Absorb traffic bursts without dropping requests | 3, 5 | E | Large batch is accepted quickly; queue drains at the rate limit | Phase 3 part done |
+| NFR-01 | Handle millions of notifications per day | 0, 5 | D, E | Capacity reasoning in ADR-0001; load script numbers in the README | Phase 5 part done (numbers in ADR-0016; README in Phase 6) |
+| NFR-02 | Absorb traffic bursts without dropping requests | 3, 5 | E | Large batch is accepted quickly; queue drains at the rate limit (`make load`: 10,000 accepted in about 1 s, drained at about 100/s per channel) | Done |
 | NFR-03 | Reliable delivery (no silent loss) | 4 | I, F | At-least-once semantics per ADR-0005 | Done |
-| NFR-04 | Status visible to API consumers and internal teams | 2, 5 | H, E | Status endpoints plus metrics and logs | Phase 2 part done |
+| NFR-04 | Status visible to API consumers and internal teams | 2, 5 | H, E | Status endpoints plus metrics and logs | Done |
 | NFR-05 | Implemented in Go 1.2x | 1 | D | `go.mod` Go version | Done |
 
 ## 6. Deliverables

@@ -15,11 +15,11 @@ flowchart LR
 
     subgraph App["notifier (one Go binary)"]
         API["HTTP API<br/>net/http + middleware<br/>(request ID, logging, recovery)"]
-        Obs["/metrics and /health"]
+        Obs["/metrics (Prometheus)<br/>/livez, /readyz"]
         subgraph Engine["Worker engine"]
-            DS["SMS dispatcher"] --> LS["token bucket<br/>100/s"]
-            DE["Email dispatcher"] --> LE["token bucket<br/>100/s"]
-            DP["Push dispatcher"] --> LP["token bucket<br/>100/s"]
+            DS["SMS dispatcher<br/>+ circuit breaker"] --> LS["token bucket + window cap<br/>100/s"]
+            DE["Email dispatcher<br/>+ circuit breaker"] --> LE["token bucket + window cap<br/>100/s"]
+            DP["Push dispatcher<br/>+ circuit breaker"] --> LP["token bucket + window cap<br/>100/s"]
             LS --> PC
             LE --> PC
             LP --> PC
@@ -109,12 +109,14 @@ lease-recovery half of the claim (rows whose worker crashed). Migration `000001`
 
 ```
 cmd/notifier/          main: wiring, config, signal handling, graceful shutdown
+cmd/mockprovider/      the mock provider as a server, with injectable failures
 internal/config/       environment variables to a typed Config struct
 internal/logging/      JSON logger; request ID carried through context.Context
 internal/notification/ domain types, validation, status transitions (no I/O)
 internal/store/        PostgreSQL access: CRUD, claim, complete, queue depth
-internal/httpapi/      handlers, middleware, JSON helpers
-internal/worker/       dispatchers, rate limiting, retry policy
+internal/httpapi/      handlers, middleware, health checks, JSON helpers
+internal/worker/       dispatchers, rate limiting, retry policy, circuit breaker
+internal/metrics/      Prometheus registry and the service's metrics (ADR-0016)
 internal/provider/     HTTP client for the provider + mock provider server
 migrations/            versioned SQL migrations (golang-migrate), embedded in the binary
 internal/testdb/       test helper: one fresh database per integration test
@@ -123,3 +125,14 @@ internal/testdb/       test helper: one fresh database per integration test
 Interfaces exist only at real boundaries: the store (so handlers can be tested with a fake), the
 provider client (so workers can be tested with a fake) and the clock (so backoff and leases are
 testable).
+
+## Observability (ADR-0016)
+
+- `GET /metrics`: Prometheus metrics. Queue depth per channel, priority and status (read from the
+  database per scrape), delivery outcomes, provider call duration, end-to-end latency, circuit
+  breaker state, released rows, plus Go runtime and process metrics.
+- `GET /livez` (alias `/health`): the process serves HTTP. `GET /readyz`: the database answers and
+  the process is not shutting down; on SIGTERM it fails `SHUTDOWN_DRAIN_DELAY` before the
+  listener closes.
+- JSON logs with the request ID on every line, from the API request through the worker to the
+  provider's `X-Request-ID`. Access logs name the matched route; probe requests log at DEBUG.
