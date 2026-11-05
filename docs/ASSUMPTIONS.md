@@ -51,6 +51,10 @@ an open design decision point to the ADR.
 | A-46 | Which changes are real-time events | Changes of `status` or `attempts` only. Creation is not an event (a client cannot know the ID in advance), and other column changes are not announced. | These are the changes a client tracks; fewer events keep NOTIFY cheap. | Accepted |
 | A-47 | Who may watch a notification | Anyone who knows its ID, like the rest of the API (A-15). Browsers may only connect from the same origin, which stops other websites from opening sockets in a visitor's browser. | Consistent with the assessment's scope; IDs are random UUIDv7. | Accepted |
 | A-48 | Whether the event feed affects readiness | No. While the listener reconnects, the event endpoints answer `503` and everything else keeps working, like an open circuit breaker (A-33). | Real-time status is an extra; failing readiness would take a working API out of rotation. | Accepted |
+| A-49 | How many traces are kept | Compose samples every trace. A caller's sampling decision in `traceparent` is respected; at production volume `OTEL_TRACES_SAMPLER` would keep a share. | Full sampling suits a demo; sampling is configuration, not code. | Proposed |
+| A-50 | Whether to trust an incoming `traceparent` | Accepted from any caller, like the rest of the API (A-15). It only lets the caller's trace include our spans; it changes no behavior. | Continuing callers' traces is the point of propagation. | Proposed |
+| A-51 | What is not traced | Health probes and metric scrapes. A WebSocket connection is one span for its whole life. | Probes every few seconds would bury real traces. | Proposed |
+| A-52 | Where traces are stored | In Jaeger's memory inside Compose; they are lost when it restarts. | A demo viewer; production would export to a managed backend through the same OTLP setting. | Proposed |
 | A-29 | Allowed `Idempotency-Key` values | 1-255 printable ASCII characters, not only spaces. Other values return `400`. | Keys end up in logs and indexes; UUIDs and typical client keys fit. | Accepted |
 
 ## Processing and scale

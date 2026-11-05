@@ -4,8 +4,8 @@ A notification service in Go that accepts SMS, email and push notifications over
 and delivers them asynchronously through an external provider. It is built for bursts:
 the API stores work and answers at once, while workers drain the queue at a fixed rate of 100
 messages per second per channel, with priorities, retries, a dead-letter state, a circuit
-breaker per channel, scheduled sends, message templates, real-time status over WebSocket and
-Prometheus metrics.
+breaker per channel, scheduled sends, message templates, real-time status over WebSocket,
+Prometheus metrics and OpenTelemetry tracing.
 
 PostgreSQL is both the source of truth and the queue, so the whole system is one Go binary and
 one database.
@@ -32,8 +32,9 @@ cd event-driven-notification-system
 docker compose up --build
 ```
 
-This starts three containers: the app on port 8080, PostgreSQL, and a **mock provider** that
-accepts every message and logs it. Migrations run automatically at startup. Check it:
+This starts four containers: the app on port 8080, PostgreSQL, a **mock provider** that
+accepts every message and logs it, and **Jaeger**, the trace viewer, at
+[localhost:16686](http://localhost:16686). Migrations run automatically at startup. Check it:
 
 ```sh
 curl localhost:8080/health          # {"status":"ok"}
@@ -248,7 +249,7 @@ points in the brief, and the assumptions made about them, are in
 | Batches | All-or-nothing, errors reported per item index | [0006](docs/adr/0006-batch-semantics.md) |
 | Cancellation | Only `pending` can be cancelled; in-flight sends are not interrupted | [0007](docs/adr/0007-cancellation-semantics.md) |
 | Priority | Weighted 70/20/10 instead of strict priority, to avoid starvation | [0008](docs/adr/0008-priority-scheduling.md) |
-| Dependencies | Six libraries: pgx, golang-migrate, uuid, x/time/rate, Prometheus client, coder/websocket | [0009](docs/adr/0009-dependencies.md) |
+| Dependencies | pgx, golang-migrate, uuid, x/time/rate, Prometheus client, coder/websocket, OpenTelemetry (each justified) | [0009](docs/adr/0009-dependencies.md) |
 | Test database | A Compose-managed Postgres, one fresh database per test | [0010](docs/adr/0010-test-database.md) |
 | Migrations | Embedded in the binary and applied at startup | [0011](docs/adr/0011-migrations-at-startup.md) |
 | API semantics | `200` for replays, cursor pagination without totals, unknown fields rejected | [0012](docs/adr/0012-api-response-semantics.md) |
@@ -260,6 +261,7 @@ points in the brief, and the assumptions made about them, are in
 | Docs and CI | Hand-written OpenAPI checked against the routes; GitHub Actions | [0018](docs/adr/0018-api-documentation-and-ci.md) |
 | Templates | Immutable templates with strict `{{name}}` placeholders, rendered when the request arrives | [0019](docs/adr/0019-message-templates.md) |
 | Real-time status | WebSocket per notification or batch, fed by a Postgres trigger through LISTEN/NOTIFY | [0020](docs/adr/0020-real-time-status.md) |
+| Tracing | OpenTelemetry; each delivery attempt is its own trace, linked to the request through the queue row | [0021](docs/adr/0021-distributed-tracing.md) |
 
 ## Operations
 
@@ -323,6 +325,25 @@ to delivery:
 ```sh
 docker compose logs app | grep '"request_id":"checkout-7f3a9c"'
 ```
+
+### Tracing
+
+Every API request and every delivery attempt is traced with OpenTelemetry and shown in Jaeger at
+[localhost:16686](http://localhost:16686) (choose the service `notifier`). A delivery is its own
+trace, linked to the request that created it, with its steps timed:
+
+```
+POST /v1/notifications                 5.67 ms
+deliver sms                            6.10 ms   (linked to the request above)
+  rate limit wait                      0.00 ms
+  provider call                        2.47 ms
+  record result                        3.57 ms
+```
+
+Log lines inside a span carry `trace_id`, and the provider receives a `traceparent` header.
+Configuration uses the standard `OTEL_*` variables; an empty `OTEL_EXPORTER_OTLP_ENDPOINT` turns
+tracing off. Tracing is the heaviest dependency in the project (the binary grows by about 40%);
+ADR-0021 has the measured cost.
 
 ### Failure injection
 
@@ -392,8 +413,6 @@ These are deliberate trade-offs for the assessment's scope, each discussed in an
 - Table partitioning and a retention policy for finished notifications.
 - Authentication with per-client idempotency keys and rate limits on intake.
 - An optional `expiresAt` per notification, so stale messages are dead-lettered instead of sent.
-- OpenTelemetry tracing across the API, the queue and the provider call, replacing the manual
-  correlation ID.
 
 ## How this was built
 

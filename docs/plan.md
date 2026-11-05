@@ -16,6 +16,7 @@ and the maintainer's review (30-45 minutes per phase).
 | 6 | Delivery: OpenAPI spec served at `/openapi.yaml`, README with Mermaid diagram, decisions and limitations, GitHub Actions (test + lint), clean-clone check | Fresh clone: `docker compose up` and `make test` green | 2.0 h |
 | 6b | Bonus: message templates (ADR-0019) | A templated notification is rendered, validated and delivered | 3.0 h |
 | 6c | Bonus: real-time status over WebSocket (ADR-0020) | A 1000-item batch is watched live until every item is final | 4.0 h |
+| 6d | Bonus: distributed tracing with OpenTelemetry (ADR-0021) | A request and its delivery appear in Jaeger, linked, with step timings | 3.5 h |
 | **Total** | | | **14.0 h** planned for phases 0-6; 4b and 5b were added later |
 
 ## Decisions deferred to later phases

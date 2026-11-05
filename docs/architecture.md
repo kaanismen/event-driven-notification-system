@@ -32,7 +32,8 @@ flowchart LR
     DB -->|claim batch<br/>FOR UPDATE SKIP LOCKED| DS
     DB -->|claim batch| DE
     DB -->|claim batch| DP
-    PC -->|POST JSON| Prov["webhook.site<br/>(or mock provider in tests)"]
+    PC -->|POST JSON + traceparent| Prov["webhook.site<br/>(or mock provider in tests)"]
+    App -.->|spans over OTLP| Jaeger["Jaeger<br/>trace viewer"]
     PC -->|sent / retry later / failed| DB
     Obs -->|queue depth| DB
     DB -.->|NOTIFY on status change| RT
@@ -109,6 +110,9 @@ stateDiagram-v2
 
 `idempotency_keys`: `key` (primary key), `request_hash`, `resource_type`, `resource_id`, `created_at`.
 
+`notifications.trace_parent` (migration `000006`) holds the creating request's W3C traceparent,
+which each delivery attempt's trace links to (ADR-0021).
+
 `notifications.version` (migration `000005`) counts the updates of a row; a trigger bumps it and
 announces status changes with NOTIFY (ADR-0020).
 
@@ -135,6 +139,7 @@ internal/httpapi/      handlers, middleware, health checks, JSON helpers
 internal/worker/       dispatchers, rate limiting, retry policy, circuit breaker
 internal/metrics/      Prometheus registry and the service's metrics (ADR-0016)
 internal/events/       LISTEN for status changes and fan them out to subscribers (ADR-0020)
+internal/tracing/      OpenTelemetry setup and traceparent helpers (ADR-0021)
 cmd/watch/             command-line client for the real-time status endpoints
 internal/provider/     HTTP client for the provider + mock provider server
 migrations/            versioned SQL migrations (golang-migrate), embedded in the binary
