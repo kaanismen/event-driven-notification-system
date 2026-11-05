@@ -22,10 +22,13 @@ type Cursor struct {
 type ListFilter struct {
 	Status  notification.Status
 	Channel notification.Channel
-	From    time.Time // inclusive lower bound on created_at
-	To      time.Time // exclusive upper bound on created_at (A-12)
-	After   *Cursor   // nil for the first page
-	Limit   int
+	// Scheduled, when set, keeps only notifications created with (true) or without
+	// (false) a scheduled time.
+	Scheduled *bool
+	From      time.Time // inclusive lower bound on created_at
+	To        time.Time // exclusive upper bound on created_at (A-12)
+	After     *Cursor   // nil for the first page
+	Limit     int
 }
 
 // ListPage is one page of results. Next is nil on the last page.
@@ -57,6 +60,13 @@ func (s *Store) List(ctx context.Context, f ListFilter) (ListPage, error) {
 	}
 	if f.Channel != "" {
 		conds = append(conds, "channel = "+arg(string(f.Channel)))
+	}
+	if f.Scheduled != nil {
+		if *f.Scheduled {
+			conds = append(conds, "scheduled_at IS NOT NULL")
+		} else {
+			conds = append(conds, "scheduled_at IS NULL")
+		}
 	}
 	if !f.From.IsZero() {
 		conds = append(conds, "created_at >= "+arg(f.From))

@@ -5,6 +5,7 @@ import (
 	"net/mail"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -15,6 +16,10 @@ type Request struct {
 	Recipient string
 	Content   string
 	Priority  Priority
+	// ScheduledAt is the earliest time to send (ADR-0017, A-38); nil means now.
+	// omitempty keeps the idempotency hash of unscheduled requests identical to the
+	// hash stored before scheduling existed, so their replays still match.
+	ScheduledAt *time.Time `json:",omitempty"`
 }
 
 // FieldError describes one invalid field, in terms a client can act on.
@@ -28,6 +33,11 @@ const (
 	maxPushLength  = 256
 	maxEmailLength = 10_000
 	maxPushToken   = 512
+
+	// scheduleTolerance is how far in the past scheduledAt may be and still count as
+	// "now": it absorbs small differences between the client's clock and ours. Further in
+	// the past is almost always a client bug, such as a wrong time zone (ADR-0017).
+	scheduleTolerance = time.Minute
 )
 
 // e164 is "+", a non-zero digit, then 7 to 14 more digits: 8 to 15 digits in total.
@@ -41,11 +51,19 @@ func (r Request) Normalized() Request {
 	if r.Priority == "" {
 		r.Priority = PriorityNormal
 	}
+	if r.ScheduledAt != nil {
+		// UTC and microseconds, which is what PostgreSQL stores, so the time a client
+		// reads back and the idempotency hash both match what was sent.
+		t := r.ScheduledAt.UTC().Truncate(time.Microsecond)
+		r.ScheduledAt = &t
+	}
 	return r
 }
 
-// Validate returns every problem with a normalized request, or nil if it is valid.
-func (r Request) Validate() []FieldError {
+// Validate returns every problem with a normalized request, or nil if it is valid. now
+// and maxScheduleAhead bound scheduledAt; they are parameters, not time.Now() and a
+// constant, so the rules stay pure and testable.
+func (r Request) Validate(now time.Time, maxScheduleAhead time.Duration) []FieldError {
 	var errs []FieldError
 	add := func(field, format string, args ...any) {
 		errs = append(errs, FieldError{Field: field, Message: fmt.Sprintf(format, args...)})
@@ -74,6 +92,15 @@ func (r Request) Validate() []FieldError {
 		// Characters (Unicode code points), not bytes: "ü" counts as one.
 		if n := utf8.RuneCountInString(r.Content); n > limit {
 			add("content", "must be at most %d characters for %s, got %d", limit, r.Channel, n)
+		}
+	}
+
+	if r.ScheduledAt != nil {
+		switch at := *r.ScheduledAt; {
+		case at.Before(now.Add(-scheduleTolerance)):
+			add("scheduledAt", "must not be in the past (got %s, now is %s)", at.Format(time.RFC3339), now.UTC().Format(time.RFC3339))
+		case at.After(now.Add(maxScheduleAhead)):
+			add("scheduledAt", "must be at most %s ahead", aheadText(maxScheduleAhead))
 		}
 	}
 
@@ -112,4 +139,12 @@ func maxContentLength(c Channel) int {
 		return maxEmailLength
 	}
 	return 0
+}
+
+// aheadText writes a whole number of days as "30 days" instead of Go's "720h0m0s".
+func aheadText(d time.Duration) string {
+	if day := 24 * time.Hour; d >= day && d%day == 0 {
+		return fmt.Sprintf("%d days", d/day)
+	}
+	return d.String()
 }

@@ -33,12 +33,14 @@ func get(t *testing.T, m *Metrics) string {
 func TestQueueDepthIsReportedWithZeros(t *testing.T) {
 	m := New()
 	m.WatchQueue(fakeDepth{rows: []store.QueueDepth{
-		{Channel: notification.ChannelSMS, Priority: notification.PriorityHigh, Status: notification.StatusPending, Count: 42},
+		{Channel: notification.ChannelSMS, Priority: notification.PriorityHigh, State: store.StatePending, Count: 42},
+		{Channel: notification.ChannelPush, Priority: notification.PriorityLow, State: store.StateScheduled, Count: 7},
 	}}, slog.New(slog.DiscardHandler))
 
 	body := get(t, m)
 	for _, want := range []string{
 		`notifier_queue_depth{channel="sms",priority="high",status="pending"} 42`,
+		`notifier_queue_depth{channel="push",priority="low",status="scheduled"} 7`,
 		// Empty queues are reported as 0 rather than left out.
 		`notifier_queue_depth{channel="push",priority="low",status="processing"} 0`,
 		// Runtime metrics come with the registry.
@@ -48,8 +50,8 @@ func TestQueueDepthIsReportedWithZeros(t *testing.T) {
 			t.Errorf("metrics output lacks %q", want)
 		}
 	}
-	if n := strings.Count(body, "notifier_queue_depth{"); n != 18 {
-		t.Errorf("%d queue depth series, want 18 (3 channels x 3 priorities x 2 statuses)", n)
+	if n := strings.Count(body, "notifier_queue_depth{"); n != 27 {
+		t.Errorf("%d queue depth series, want 27 (3 channels x 3 priorities x 3 states)", n)
 	}
 }
 

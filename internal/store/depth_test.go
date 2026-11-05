@@ -30,9 +30,9 @@ func TestQueueDepthCountsOnlyOpenRows(t *testing.T) {
 		got[r] = true
 	}
 	want := []QueueDepth{
-		{notification.ChannelSMS, notification.PriorityHigh, notification.StatusPending, 2},
-		{notification.ChannelSMS, notification.PriorityHigh, notification.StatusProcessing, 1},
-		{notification.ChannelEmail, notification.PriorityLow, notification.StatusPending, 2},
+		{notification.ChannelSMS, notification.PriorityHigh, StatePending, 2},
+		{notification.ChannelSMS, notification.PriorityHigh, StateProcessing, 1},
+		{notification.ChannelEmail, notification.PriorityLow, StatePending, 2},
 	}
 	if len(rows) != len(want) {
 		t.Errorf("QueueDepth returned %d rows, want %d: %+v", len(rows), len(want), rows)

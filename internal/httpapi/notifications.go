@@ -20,15 +20,40 @@ type createRequest struct {
 	Recipient string `json:"recipient"`
 	Content   string `json:"content"`
 	Priority  string `json:"priority"`
+	// ScheduledAt is a string, not a time.Time, so a malformed value becomes a field
+	// error with a clear message (422) instead of a generic JSON decoding error (400).
+	ScheduledAt string `json:"scheduledAt"`
 }
 
-func (c createRequest) toDomain() notification.Request {
-	return notification.Request{
+// toDomain converts and normalizes the request. A scheduledAt that is not a valid
+// RFC 3339 time with a time zone is returned as a field error; the rest of the request
+// is still converted so every problem can be reported at once.
+func (c createRequest) toDomain() (notification.Request, []notification.FieldError) {
+	r := notification.Request{
 		Channel:   notification.Channel(c.Channel),
 		Recipient: c.Recipient,
 		Content:   c.Content,
 		Priority:  notification.Priority(c.Priority),
-	}.Normalized()
+	}
+	var errs []notification.FieldError
+	if c.ScheduledAt != "" {
+		t, err := time.Parse(time.RFC3339Nano, c.ScheduledAt)
+		if err != nil {
+			errs = append(errs, notification.FieldError{
+				Field:   "scheduledAt",
+				Message: "must be an RFC 3339 time with a time zone, for example 2026-11-06T09:00:00Z or 2026-11-06T12:00:00+03:00",
+			})
+		} else {
+			r.ScheduledAt = &t
+		}
+	}
+	return r.Normalized(), errs
+}
+
+// validate converts one wire request and returns it with every problem found.
+func (a *api) validate(c createRequest) (notification.Request, []notification.FieldError) {
+	req, errs := c.toDomain()
+	return req, append(errs, req.Validate(time.Now(), a.maxScheduleAhead)...)
 }
 
 type batchRequest struct {
@@ -46,6 +71,7 @@ type notificationResponse struct {
 	Attempts          int        `json:"attempts"`
 	MaxAttempts       int        `json:"maxAttempts"`
 	NextAttemptAt     *time.Time `json:"nextAttemptAt,omitempty"`
+	ScheduledAt       *time.Time `json:"scheduledAt,omitempty"`
 	LastError         string     `json:"lastError,omitempty"`
 	ProviderMessageID string     `json:"providerMessageId,omitempty"`
 	CorrelationID     string     `json:"correlationId,omitempty"`
@@ -70,6 +96,7 @@ func toResponse(n notification.Notification) notificationResponse {
 		CreatedAt:         n.CreatedAt,
 		UpdatedAt:         n.UpdatedAt,
 		SentAt:            n.SentAt,
+		ScheduledAt:       n.ScheduledAt,
 	}
 	if n.BatchID != nil {
 		resp.BatchID = n.BatchID.String()
@@ -106,8 +133,8 @@ func (a *api) createNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := body.toDomain()
-	if errs := req.Validate(); len(errs) > 0 {
+	req, errs := a.validate(body)
+	if len(errs) > 0 {
 		a.fail(w, r, validationFailed(fieldErrors(nil, errs)))
 		return
 	}
@@ -148,8 +175,9 @@ func (a *api) createBatch(w http.ResponseWriter, r *http.Request) {
 	reqs := make([]notification.Request, len(body.Notifications))
 	var details []fieldErrorBody
 	for i, item := range body.Notifications {
-		reqs[i] = item.toDomain()
-		if errs := reqs[i].Validate(); len(errs) > 0 {
+		var errs []notification.FieldError
+		reqs[i], errs = a.validate(item)
+		if len(errs) > 0 {
 			index := i
 			details = append(details, fieldErrors(&index, errs)...)
 		}

@@ -89,7 +89,8 @@ func run() error {
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.NewHandler(httpapi.Deps{
-			Logger: logger, Store: st, MaxAttempts: cfg.MaxAttempts, Ready: ready, Metrics: m.Handler(),
+			Logger: logger, Store: st, MaxAttempts: cfg.MaxAttempts, MaxScheduleAhead: cfg.MaxScheduleAhead,
+			Ready: ready, Metrics: m.Handler(),
 		}),
 		// Explicit timeouts: the zero values mean "wait forever", which lets slow or idle
 		// clients hold connections open indefinitely.

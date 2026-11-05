@@ -3,6 +3,12 @@ package notification
 import (
 	"strings"
 	"testing"
+	"time"
+)
+
+var (
+	testNow      = time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	testMaxAhead = 30 * 24 * time.Hour
 )
 
 func TestNormalized(t *testing.T) {
@@ -67,7 +73,7 @@ func TestValidate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := tt.req.Validate()
+			errs := tt.req.Validate(testNow, testMaxAhead)
 			var got []string
 			for _, e := range errs {
 				got = append(got, e.Field)
@@ -105,5 +111,48 @@ func TestStatusValid(t *testing.T) {
 	}
 	if Status("lost").Valid() {
 		t.Error(`"lost" reported as valid`)
+	}
+}
+
+func TestValidateSchedule(t *testing.T) {
+	at := func(d time.Duration) *time.Time { v := testNow.Add(d); return &v }
+	base := Request{Channel: ChannelPush, Recipient: "tok", Content: "hi"}
+	tests := []struct {
+		name  string
+		when  *time.Time
+		valid bool
+	}{
+		{"not scheduled", nil, true},
+		{"one hour ahead", at(time.Hour), true},
+		{"exactly the maximum", at(testMaxAhead), true},
+		{"beyond the maximum", at(testMaxAhead + time.Second), false},
+		{"30 s in the past counts as now", at(-30 * time.Second), true},
+		{"two minutes in the past", at(-2 * time.Minute), false},
+	}
+	for _, tt := range tests {
+		r := base
+		r.ScheduledAt = tt.when
+		errs := r.Normalized().Validate(testNow, testMaxAhead)
+		if valid := len(errs) == 0; valid != tt.valid {
+			t.Errorf("%s: errors %+v, want valid=%t", tt.name, errs, tt.valid)
+		}
+		for _, e := range errs {
+			if e.Field != "scheduledAt" {
+				t.Errorf("%s: unexpected field %q", tt.name, e.Field)
+			}
+		}
+	}
+}
+
+func TestNormalizedScheduleIsUTCMicroseconds(t *testing.T) {
+	ist := time.FixedZone("UTC+3", 3*60*60)
+	local := time.Date(2026, 11, 6, 12, 0, 0, 123456789, ist)
+	got := Request{ScheduledAt: &local}.Normalized().ScheduledAt
+	want := time.Date(2026, 11, 6, 9, 0, 0, 123456000, time.UTC)
+	if got == nil || !got.Equal(want) || got.Location() != time.UTC {
+		t.Errorf("ScheduledAt = %v, want %v in UTC", got, want)
+	}
+	if local.Nanosecond() != 123456789 {
+		t.Error("Normalized changed the caller's time value")
 	}
 }

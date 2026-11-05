@@ -12,6 +12,7 @@ services:
       SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-15s}
       SHUTDOWN_DRAIN_DELAY: ${SHUTDOWN_DRAIN_DELAY:-2s}
       MAX_ATTEMPTS: ${MAX_ATTEMPTS:-8}
+      MAX_SCHEDULE_AHEAD: ${MAX_SCHEDULE_AHEAD:-720h}
       DB_MAX_CONNS: ${DB_MAX_CONNS:-20}
       # Defaults to the bundled mock provider, so the stack works without a webhook.site
       # account. Set PROVIDER_URL in .env to deliver to webhook.site instead.

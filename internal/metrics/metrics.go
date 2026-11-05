@@ -135,7 +135,7 @@ const queueDepthTimeout = 2 * time.Second
 
 var queueDepthDesc = prometheus.NewDesc(
 	"notifier_queue_depth",
-	"Notifications waiting (pending, including retries scheduled for later) or in flight (processing), per channel and priority (A-37).",
+	"Open notifications per channel, priority and state: pending (due now or retrying later, A-37), scheduled (waiting for a future send time) or processing.",
 	[]string{"channel", "priority", "status"}, nil,
 )
 
@@ -165,12 +165,12 @@ func (c *queueCollector) Collect(ch chan<- prometheus.Metric) {
 	// its queue empties (a missing series reads as "unknown", not as "zero").
 	counts := map[[3]string]int64{}
 	for _, r := range rows {
-		counts[[3]string{string(r.Channel), string(r.Priority), string(r.Status)}] = r.Count
+		counts[[3]string{string(r.Channel), string(r.Priority), r.State}] = r.Count
 	}
 	for _, chn := range []notification.Channel{notification.ChannelSMS, notification.ChannelEmail, notification.ChannelPush} {
 		for _, p := range []notification.Priority{notification.PriorityHigh, notification.PriorityNormal, notification.PriorityLow} {
-			for _, s := range []notification.Status{notification.StatusPending, notification.StatusProcessing} {
-				key := [3]string{string(chn), string(p), string(s)}
+			for _, s := range store.QueueStates() {
+				key := [3]string{string(chn), string(p), s}
 				ch <- prometheus.MustNewConstMetric(queueDepthDesc, prometheus.GaugeValue, float64(counts[key]), key[:]...)
 			}
 		}

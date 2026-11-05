@@ -32,6 +32,7 @@ func TestLoadDefaults(t *testing.T) {
 		ShutdownTimeout:    15 * time.Second,
 		ShutdownDrainDelay: 2 * time.Second,
 		MaxAttempts:        8,
+		MaxScheduleAhead:   30 * 24 * time.Hour,
 		ProviderURL:        "https://webhook.example/secret-token",
 		ProviderTimeout:    10 * time.Second,
 		Worker: Worker{
@@ -117,6 +118,7 @@ func TestLoadReportsAllErrors(t *testing.T) {
 		{"provider url not http", map[string]string{"PROVIDER_URL": "ftp://example.com/x"}, []string{"absolute http or https"}},
 		{"provider url relative", map[string]string{"PROVIDER_URL": "/hook"}, []string{"absolute http or https"}},
 		{"breaker threshold zero", map[string]string{"BREAKER_FAILURE_THRESHOLD": "0"}, []string{"BREAKER_FAILURE_THRESHOLD"}},
+		{"schedule horizon too far", map[string]string{"MAX_SCHEDULE_AHEAD": "9000h"}, []string{"MAX_SCHEDULE_AHEAD"}},
 		{"retry cap too long", map[string]string{"RETRY_MAX_DELAY": "2h"}, []string{"RETRY_MAX_DELAY must be at most"}},
 		{"retry base above cap", map[string]string{"RETRY_BASE_DELAY": "10m"}, []string{"must not exceed RETRY_MAX_DELAY"}},
 		{"lease shorter than the worst wait", map[string]string{"LEASE_DURATION": "10s"}, []string{"LEASE_DURATION"}},

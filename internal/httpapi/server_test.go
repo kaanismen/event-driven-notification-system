@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -123,7 +124,9 @@ func testDeps(logger *slog.Logger, st Store) Deps {
 		Logger:      logger,
 		Store:       st,
 		MaxAttempts: 8,
-		Ready:       func(context.Context) error { return nil },
+		// The production default (MAX_SCHEDULE_AHEAD).
+		MaxScheduleAhead: 30 * 24 * time.Hour,
+		Ready:            func(context.Context) error { return nil },
 		Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte("stub_metric 1\n"))
 		}),

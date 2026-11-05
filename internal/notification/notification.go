@@ -111,9 +111,10 @@ type Notification struct {
 	Attempts          int
 	MaxAttempts       int
 	NextAttemptAt     time.Time
-	LastError         string // empty when no attempt has failed
-	ProviderMessageID string // empty until the provider accepts the message
-	CorrelationID     string // request ID of the API call that created it
+	ScheduledAt       *time.Time // nil unless the client asked for a send time (ADR-0017)
+	LastError         string     // empty when no attempt has failed
+	ProviderMessageID string     // empty until the provider accepts the message
+	CorrelationID     string     // request ID of the API call that created it
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	SentAt            *time.Time

@@ -33,7 +33,7 @@ func pathID(r *http.Request) (uuid.UUID, error) {
 // "?stauts=failed" must not silently list everything.
 func isListParam(name string) bool {
 	switch name {
-	case "status", "channel", "from", "to", "limit", "cursor":
+	case "status", "channel", "scheduled", "from", "to", "limit", "cursor":
 		return true
 	}
 	return false
@@ -61,6 +61,14 @@ func parseListQuery(q url.Values) (store.ListFilter, error) {
 		if !f.Channel.Valid() {
 			return f, badRequest("invalid_query", "channel must be one of sms, email, push")
 		}
+	}
+
+	if v := q.Get("scheduled"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil || (v != "true" && v != "false") {
+			return f, badRequest("invalid_query", "scheduled must be true or false")
+		}
+		f.Scheduled = &b
 	}
 
 	var err error

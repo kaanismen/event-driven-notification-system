@@ -42,7 +42,7 @@ func pendingFrom(r notification.Request, batchID *uuid.UUID) notification.Notifi
 	return notification.Notification{
 		ID: uuid.Must(uuid.NewV7()), BatchID: batchID,
 		Channel: r.Channel, Recipient: r.Recipient, Content: r.Content, Priority: r.Priority,
-		Status: notification.StatusPending, MaxAttempts: 8,
+		Status: notification.StatusPending, MaxAttempts: 8, ScheduledAt: r.ScheduledAt,
 		NextAttemptAt: fixedTime, CreatedAt: fixedTime, UpdatedAt: fixedTime,
 	}
 }

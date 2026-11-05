@@ -23,6 +23,8 @@ type Config struct {
 	ShutdownDrainDelay time.Duration
 	// MaxAttempts is the delivery budget copied into each new notification (ADR-0002).
 	MaxAttempts int
+	// MaxScheduleAhead is how far in the future a notification may be scheduled (ADR-0017).
+	MaxScheduleAhead time.Duration
 
 	// ProviderURL is where notifications are POSTed (webhook.site or the mock provider).
 	// It is never logged in full: a webhook.site URL works like a password.
@@ -57,6 +59,10 @@ type Worker struct {
 // overflowing a Duration.
 const maxRetryDelay = time.Hour
 
+// maxScheduleAhead bounds MAX_SCHEDULE_AHEAD at one year: a notification is a message
+// for the near future, and a far bound catches typos such as a year of 2062.
+const maxScheduleAhead = 365 * 24 * time.Hour
+
 // Load reads the configuration through getenv (os.Getenv in production, a map lookup in
 // tests). It reports every invalid setting at once, so a misconfigured deployment fails
 // with one complete message instead of one error per restart.
@@ -72,9 +78,11 @@ func Load(getenv func(string) string) (Config, error) {
 		ShutdownDrainDelay: p.durationOrZero("SHUTDOWN_DRAIN_DELAY", 2*time.Second),
 		// The upper bound keeps a typo such as 1000 from turning a dead provider into
 		// hours of retries per message.
-		MaxAttempts:     p.integer("MAX_ATTEMPTS", 8, 1, 20),
-		ProviderURL:     p.str("PROVIDER_URL", ""),
-		ProviderTimeout: p.duration("PROVIDER_TIMEOUT", 10*time.Second),
+		MaxAttempts: p.integer("MAX_ATTEMPTS", 8, 1, 20),
+		// 30 days. Go durations have no "d" unit, so it is written in hours.
+		MaxScheduleAhead: p.duration("MAX_SCHEDULE_AHEAD", 30*24*time.Hour),
+		ProviderURL:      p.str("PROVIDER_URL", ""),
+		ProviderTimeout:  p.duration("PROVIDER_TIMEOUT", 10*time.Second),
 		Worker: Worker{
 			RatePerSecond:     p.integer("RATE_LIMIT_PER_SECOND", 100, 1, 10_000),
 			SendersPerChannel: p.integer("SENDERS_PER_CHANNEL", 50, 1, 1000),
@@ -103,6 +111,10 @@ func Load(getenv func(string) string) (Config, error) {
 	} else if u, err := url.Parse(cfg.ProviderURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		// The value is not repeated in the error: it may contain a secret token.
 		p.fail("PROVIDER_URL must be an absolute http or https URL")
+	}
+
+	if cfg.MaxScheduleAhead > maxScheduleAhead {
+		p.fail("MAX_SCHEDULE_AHEAD must be at most %s, got %s", maxScheduleAhead, cfg.MaxScheduleAhead)
 	}
 
 	if r := cfg.Worker; r.RetryMaxDelay > maxRetryDelay {

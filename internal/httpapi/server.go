@@ -31,6 +31,8 @@ type Deps struct {
 	Store  Store
 	// MaxAttempts is copied into each new notification (ADR-0002).
 	MaxAttempts int
+	// MaxScheduleAhead is how far in the future scheduledAt may be (ADR-0017).
+	MaxScheduleAhead time.Duration
 	// Ready reports whether this instance should receive traffic: the database answers
 	// and the process is not shutting down. The error text is shown to the caller.
 	Ready func(ctx context.Context) error
@@ -40,15 +42,19 @@ type Deps struct {
 
 // api holds the dependencies shared by all handlers.
 type api struct {
-	logger      *slog.Logger
-	store       Store
-	maxAttempts int
-	ready       func(ctx context.Context) error
+	logger           *slog.Logger
+	store            Store
+	maxAttempts      int
+	maxScheduleAhead time.Duration
+	ready            func(ctx context.Context) error
 }
 
 // NewHandler returns the root handler with every route and middleware attached.
 func NewHandler(d Deps) http.Handler {
-	a := &api{logger: d.Logger, store: d.Store, maxAttempts: d.MaxAttempts, ready: d.Ready}
+	a := &api{
+		logger: d.Logger, store: d.Store, maxAttempts: d.MaxAttempts,
+		maxScheduleAhead: d.MaxScheduleAhead, ready: d.Ready,
+	}
 
 	mux := http.NewServeMux()
 	// Liveness and readiness are separate questions (ADR-0016). /health predates the
