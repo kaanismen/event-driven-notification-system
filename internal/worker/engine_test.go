@@ -24,14 +24,17 @@ import (
 	"github.com/kaanismen/insider-assessment/internal/store"
 )
 
-// fakeStore is an in-memory queue. Priority order and SQL details are tested in the
-// store package; here we only need rows to come out and results to be recorded.
+// fakeStore is an in-memory queue. Priority order, due times and SQL details are tested
+// in the store package; here we only need rows to come out and results to be recorded.
+// Retries and released rows go straight back into the queue. The failure-injection
+// tests in failure_test.go run the engine against the real store.
 type fakeStore struct {
 	mu      sync.Mutex
 	pending map[notification.Channel][]notification.Notification
 	sent    map[uuid.UUID]string // id -> provider message id
 	failed  map[uuid.UUID]string // id -> reason
-	done    chan struct{}        // closed when every row has a result
+	claimed map[uuid.UUID]notification.Notification
+	done    chan struct{} // closed when every row has a result
 	total   int
 }
 
@@ -40,6 +43,7 @@ func newFakeStore(rows []notification.Notification) *fakeStore {
 		pending: map[notification.Channel][]notification.Notification{},
 		sent:    map[uuid.UUID]string{},
 		failed:  map[uuid.UUID]string{},
+		claimed: map[uuid.UUID]notification.Notification{},
 		done:    make(chan struct{}),
 		total:   len(rows),
 	}
@@ -59,6 +63,7 @@ func (f *fakeStore) Claim(_ context.Context, p store.ClaimParams) ([]notificatio
 	for i := range batch {
 		batch[i].Status = notification.StatusProcessing
 		batch[i].Attempts++
+		f.claimed[batch[i].ID] = batch[i]
 	}
 	return batch, nil
 }
@@ -67,6 +72,7 @@ func (f *fakeStore) MarkSent(_ context.Context, id uuid.UUID, _ int, msgID strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent[id] = msgID
+	delete(f.claimed, id)
 	f.checkDone()
 	return true, nil
 }
@@ -75,8 +81,36 @@ func (f *fakeStore) MarkFailed(_ context.Context, id uuid.UUID, _ int, reason st
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failed[id] = reason
+	delete(f.claimed, id)
 	f.checkDone()
 	return true, nil
+}
+
+func (f *fakeStore) MarkRetry(_ context.Context, id uuid.UUID, attempt int, _ time.Duration, reason string) (bool, error) {
+	return f.requeue(id, attempt, reason, 0), nil
+}
+
+func (f *fakeStore) Release(_ context.Context, id uuid.UUID, attempt int) (bool, error) {
+	return f.requeue(id, attempt, "", -1), nil
+}
+
+func (f *fakeStore) FailExhaustedLeases(context.Context, notification.Channel) (int64, error) {
+	return 0, nil
+}
+
+// requeue puts a claimed row back; the fake keeps only the ID and attempt it was handed,
+// so the row is rebuilt from the claimed copy the engine still owns.
+func (f *fakeStore) requeue(id uuid.UUID, attempt int, reason string, attemptDelta int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.claimed[id]
+	if !ok || n.Attempts != attempt {
+		return false
+	}
+	delete(f.claimed, id)
+	n.Status, n.LastError, n.Attempts = notification.StatusPending, reason, n.Attempts+attemptDelta
+	f.pending[n.Channel] = append(f.pending[n.Channel], n)
+	return true
 }
 
 func (f *fakeStore) checkDone() {
@@ -90,7 +124,7 @@ func rowsFor(c notification.Channel, n int) []notification.Notification {
 	for i := range rows {
 		rows[i] = notification.Notification{
 			ID: uuid.Must(uuid.NewV7()), Channel: c, Recipient: "r", Content: fmt.Sprintf("m%d", i),
-			Priority: notification.PriorityNormal, Status: notification.StatusPending,
+			Priority: notification.PriorityNormal, Status: notification.StatusPending, MaxAttempts: 8,
 			CorrelationID: fmt.Sprintf("req-%s-%d", c, i),
 		}
 	}
@@ -101,6 +135,7 @@ func testConfig() config.Worker {
 	return config.Worker{
 		RatePerSecond: 100, SendersPerChannel: 50, ClaimBatchSize: 20,
 		PollInterval: 20 * time.Millisecond, Lease: 30 * time.Second, PriorityWeights: [3]int{70, 20, 10},
+		RetryBaseDelay: time.Millisecond, RetryMaxDelay: 10 * time.Millisecond,
 	}
 }
 
@@ -237,6 +272,52 @@ func TestDeliveryRecordsResultsAndCarriesTheRequestID(t *testing.T) {
 	// OBS-05: the worker's log line for a notification carries the API request ID.
 	if want := `"request_id":"` + rows[0].CorrelationID + `"`; !strings.Contains(logs.String(), want) {
 		t.Errorf("worker logs do not contain %s:\n%s", want, logs.String())
+	}
+}
+
+// TestRetryDecisions covers the three outcomes of a failed send (ADR-0002): a transient
+// error with attempts left is retried, a permanent error is not, and a transient error on
+// the last attempt dead-letters the message.
+func TestRetryDecisions(t *testing.T) {
+	rows := rowsFor(notification.ChannelPush, 3)
+	recovers, permanent, exhausted := rows[0], rows[1], rows[2]
+	exhausted.MaxAttempts = 2
+	rows[2] = exhausted
+
+	var mu sync.Mutex
+	seen := map[string]int{} // Idempotency-Key -> requests
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("Idempotency-Key")
+		mu.Lock()
+		seen[key]++
+		n := seen[key]
+		mu.Unlock()
+		switch {
+		case key == permanent.ID.String():
+			http.Error(w, "unknown device", http.StatusBadRequest)
+		case key == recovers.ID.String() && n > 2:
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"messageId":"third-time"}`))
+		default:
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+		}
+	}))
+	defer srv.Close()
+
+	f := newFakeStore(rows)
+	e := New(f, provider.NewClient(srv.URL, time.Second), slog.New(slog.DiscardHandler), testConfig())
+	runUntilDone(t, e, f, 5*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if f.sent[recovers.ID] != "third-time" || seen[recovers.ID.String()] != 3 {
+		t.Errorf("transient errors: sent %q after %d requests, want third-time after 3", f.sent[recovers.ID], seen[recovers.ID.String()])
+	}
+	if seen[permanent.ID.String()] != 1 || !strings.Contains(f.failed[permanent.ID], "HTTP 400") {
+		t.Errorf("permanent error: %d requests, failure %q; want 1 request and the 400", seen[permanent.ID.String()], f.failed[permanent.ID])
+	}
+	if seen[exhausted.ID.String()] != 2 || !strings.Contains(f.failed[exhausted.ID], "HTTP 503") {
+		t.Errorf("max attempts 2: %d requests, failure %q; want 2 requests and the 503", seen[exhausted.ID.String()], f.failed[exhausted.ID])
 	}
 }
 
