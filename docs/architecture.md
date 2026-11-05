@@ -66,12 +66,13 @@ stateDiagram-v2
 
 ## Worker flow (deliver)
 
-1. For each channel, one dispatcher loop claims a small batch in one statement: rows that are
-   `pending` and due (`next_attempt_at <= now()`), or `processing` with an expired lease. The claim
-   sets `status = processing`, `locked_until = now() + lease` and `attempts = attempts + 1`. The
-   order follows the priority policy in ADR-0008.
-2. For each claimed row, a sender waits for a token from the channel's rate limiter (ADR-0003), then
-   POSTs `{to, channel, content}` to the provider with a timeout. The notification ID goes in an
+1. For each channel, one dispatcher goroutine claims a small batch (ADR-0013): first rows whose
+   lease expired, then due `pending` rows per priority level up to its weighted share, then any due
+   rows for unused share (ADR-0008). Each claim is one `FOR UPDATE SKIP LOCKED` statement that sets
+   `status = processing`, `locked_until = now() + lease` and `attempts = attempts + 1`. Rows go to a
+   pool of sender goroutines over an unbuffered Go channel, so nothing is claimed far ahead.
+2. For each claimed row, a sender waits for the channel's token bucket and its one-second window cap
+   (ADR-0003 and its amendment), then POSTs `{to, channel, content}` to the provider with a timeout. The notification ID goes in an
    `Idempotency-Key` header and the correlation ID in `X-Request-ID`.
 3. The result is written back, guarded by `WHERE id = $1 AND status = 'processing' AND attempts = $2`.
    If the lease expired and another worker took the row, this update matches nothing and is logged

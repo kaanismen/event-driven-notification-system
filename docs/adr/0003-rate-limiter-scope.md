@@ -50,3 +50,25 @@ of the requirement.
 - Claim batches stay small (for example 20 rows, about 200 ms of tokens) so claimed rows do not wait
   so long for tokens that their lease expires.
 - Tests check the limit with the mock provider recording request timestamps.
+
+## Amendment (2026-11-05, Phase 3): exact one-second ceiling
+
+Measured with the mock provider, the token bucket alone let **101** sends into some one-second
+windows. With burst 1 it schedules sends exactly 10 ms apart, so send 1 and send 101 are exactly one
+second apart, and the smallest timer delay on send 1 squeezes them into one window. The average rate
+was correct; a strict sliding-window count was not.
+
+Options put to the maintainer: (a) keep the bucket and add a cap on actual send times, (b) lower the
+rate to 99/s, (c) keep it and document the 101. **Chosen: (a).**
+
+- The token bucket still paces sends evenly. A window cap behind it keeps the start times of the
+  last 100 sends in a ring buffer, and a send may start only when the 100th-previous one is at least
+  one window old. That makes "at most 100 in any window" exact for our send times
+  (`internal/worker/ratelimit.go`).
+- What happens after a send starts (goroutine scheduling, the network) can still move requests
+  closer together at the provider. The window is therefore one send interval wider than a second,
+  1.01 s. Measured at the mock provider: a 2 ms margin let 101 through when the CPU was saturated by
+  the full test suite; 5 ms and 10 ms held in every run. The cost is about 1% of throughput (100
+  sends per 1.01 s, roughly 99 per second sustained).
+- No client-side limiter can fully control arrival times at a remote provider. The honest claim is:
+  exact at our boundary, with headroom for jitter.

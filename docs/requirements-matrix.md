@@ -23,7 +23,7 @@ will write. Status is updated at the end of each phase.
 | API-02 | Accept a batch of up to 1000 notifications in one request | 2 | H, I | 1000 items accepted; 0 and 1001 items rejected; invalid item handling per ADR-0006 | Done |
 | API-03 | Return the status of a notification by its ID | 2 | H, I | Known ID returns current state; unknown ID 404; malformed ID 400 | Done |
 | API-04 | Return the status of all notifications in a batch by batch ID | 2 | H, I | Summary counts per status plus items; unknown batch 404 | Done |
-| API-05 | Cancel a notification that has not been sent yet | 2, 3 | H, I | `pending` becomes `cancelled`; other states return 409; a worker never sends a cancelled row (race test) | Phase 2 part done |
+| API-05 | Cancel a notification that has not been sent yet | 2, 3 | H, I | `pending` becomes `cancelled`; other states return 409; a worker never sends a cancelled row (race test) | Done |
 | API-06 | List notifications filtered by status, channel and creation date range | 2 | I | Each filter alone and combined returns exactly the matching rows | Done |
 | API-07 | Paginate the list endpoint | 2 | I | Walking all pages returns every row once, in a stable order, even with concurrent inserts | Done |
 | API-08 | Let clients retry create requests safely (idempotency key at the API) | 2 | H, I | Same key + same body returns the original; same key + different body 409; concurrent duplicates create one row | Done |
@@ -32,25 +32,25 @@ will write. Status is updated at the end of each phase.
 
 | ID | Requirement (paraphrased) | Phase | Test | Evidence | Status |
 |----|---------------------------|-------|------|----------|--------|
-| PE-01 | Deliver notifications asynchronously through queue workers, decoupled from the API | 3 | I, E | API returns before delivery; worker moves the row to `sent` | Planned |
-| PE-02 | Never send more than 100 messages per second on any single channel | 3, 4 | U, F | Mock provider records timestamps; no 1-second window exceeds the limit per channel, retries included | Planned |
-| PE-03 | Support three priorities (high, normal, low) | 3 | I | With a backlog, claim order follows the policy in ADR-0008 | Planned |
+| PE-01 | Deliver notifications asynchronously through queue workers, decoupled from the API | 3 | I, E | API returns before delivery; worker moves the row to `sent` | Done |
+| PE-02 | Never send more than 100 messages per second on any single channel | 3, 4 | U, F | Mock provider records timestamps; no 1-second window exceeds the limit per channel, retries included | Phase 3 part done |
+| PE-03 | Support three priorities (high, normal, low) | 3 | I | With a backlog, claim order follows the policy in ADR-0008 | Done |
 | PE-04 | Validate content before accepting it (required fields, per-channel length limits) | 2 | U | Table-driven tests per channel: missing fields, too long, bad recipient format | Done |
-| PE-05 | Prevent the same notification from being sent twice | 2, 3, 4 | I, F | Only the lease holder may complete a send; stale worker update is rejected; see ADR-0004 and ADR-0005 | Phase 2 part done |
-| PE-06 | Track status transitions so clients see progress | 3 | U, I | Allowed transitions enforced; illegal ones rejected | Planned |
+| PE-05 | Prevent the same notification from being sent twice | 2, 3, 4 | I, F | Only the lease holder may complete a send; stale worker update is rejected; see ADR-0004 and ADR-0005 | Phase 3 part done |
+| PE-06 | Track status transitions so clients see progress | 3 | U, I | Allowed transitions enforced; illegal ones rejected | Done |
 
 ## 3. Delivery and retry logic (design left to the candidate)
 
 | ID | Requirement (our design) | Phase | Test | Evidence | Status |
 |----|--------------------------|-------|------|----------|--------|
-| DR-01 | Call the external provider (webhook.site URL from config) with the agreed JSON body; treat 202 + `messageId` as accepted | 3 | U, E | Client test against an `httptest` server; real notification visible on webhook.site | Planned |
+| DR-01 | Call the external provider (webhook.site URL from config) with the agreed JSON body; treat 202 + `messageId` as accepted | 3 | U, E | Client test against an `httptest` server; real notification visible on webhook.site | Done |
 | DR-02 | Classify failures as transient (network, timeout, 5xx, 429) or permanent (other 4xx) | 4 | U | Table-driven classification test | Planned |
 | DR-03 | Retry transient failures with capped exponential backoff and jitter | 4 | U | Delay stays within bounds for each attempt (seeded random source) | Planned |
 | DR-04 | Stop after a maximum number of attempts and park the message in a dead-letter state | 4 | F | Always-failing provider ends in `failed` with the last error recorded | Planned |
 | DR-05 | Recover messages held by a crashed worker (lease / visibility timeout) | 4 | I | Claimed row with an expired lease is claimed again and delivered | Planned |
 | DR-06 | Retries go through the same rate limiter as first attempts | 4 | F | Flaky provider under load still respects PE-02 | Planned |
-| DR-07 | Bound every provider call with a timeout | 3, 4 | F | Slow provider causes a timeout and a retry, not a stuck worker | Planned |
-| DR-08 | Shut down gracefully: stop claiming, finish or release in-flight work | 1, 4 | I | After shutdown no row stays in `processing` with a live lease | Phase 1 part done |
+| DR-07 | Bound every provider call with a timeout | 3, 4 | F | Slow provider causes a timeout and a retry, not a stuck worker | Phase 3 part done |
+| DR-08 | Shut down gracefully: stop claiming, finish or release in-flight work | 1, 4 | I | After shutdown no row stays in `processing` with a live lease | Phase 3 part done |
 
 ## 4. Observability
 
@@ -60,7 +60,7 @@ will write. Status is updated at the end of each phase.
 | OBS-02 | Metrics for delivery success and failure rates | 5 | F, E | Counters move as the mock provider succeeds and fails | Planned |
 | OBS-03 | Metrics for latency (provider call and end-to-end) | 5 | E | Histogram/summary values change under load | Planned |
 | OBS-04 | Structured (JSON) logs | 1 | U | Log line is valid JSON with level, message and context fields | Done |
-| OBS-05 | Correlation ID on every request, carried into worker logs for the same notification | 1, 3 | H, I | Incoming `X-Request-ID` is echoed and logged; worker log for that notification carries it | Phase 1 part done |
+| OBS-05 | Correlation ID on every request, carried into worker logs for the same notification | 1, 3 | H, I | Incoming `X-Request-ID` is echoed and logged; worker log for that notification carries it | Done |
 | OBS-06 | Health check endpoint (liveness; readiness checks the database) | 1, 5 | H, E | `/health` returns 200; readiness returns 503 when the database is down | Phase 1 part done |
 
 ## 5. Non-functional expectations (from the overview and business context)
@@ -68,7 +68,7 @@ will write. Status is updated at the end of each phase.
 | ID | Expectation (paraphrased) | Phase | Test | Evidence | Status |
 |----|---------------------------|-------|------|----------|--------|
 | NFR-01 | Handle millions of notifications per day | 0, 5 | D, E | Capacity reasoning in ADR-0001; load script numbers in the README | Planned |
-| NFR-02 | Absorb traffic bursts without dropping requests | 3, 5 | E | Large batch is accepted quickly; queue drains at the rate limit | Planned |
+| NFR-02 | Absorb traffic bursts without dropping requests | 3, 5 | E | Large batch is accepted quickly; queue drains at the rate limit | Phase 3 part done |
 | NFR-03 | Reliable delivery (no silent loss) | 4 | I, F | At-least-once semantics per ADR-0005 | Planned |
 | NFR-04 | Status visible to API consumers and internal teams | 2, 5 | H, E | Status endpoints plus metrics and logs | Phase 2 part done |
 | NFR-05 | Implemented in Go 1.2x | 1 | D | `go.mod` Go version | Done |
