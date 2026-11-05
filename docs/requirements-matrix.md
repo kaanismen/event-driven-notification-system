@@ -33,10 +33,10 @@ will write. Status is updated at the end of each phase.
 | ID | Requirement (paraphrased) | Phase | Test | Evidence | Status |
 |----|---------------------------|-------|------|----------|--------|
 | PE-01 | Deliver notifications asynchronously through queue workers, decoupled from the API | 3 | I, E | API returns before delivery; worker moves the row to `sent` | Done |
-| PE-02 | Never send more than 100 messages per second on any single channel | 3, 4 | U, F | Mock provider records timestamps; no 1-second window exceeds the limit per channel, retries included | Phase 3 part done |
+| PE-02 | Never send more than 100 messages per second on any single channel | 3, 4 | U, F | Mock provider records timestamps; no 1-second window exceeds the limit per channel, retries included | Done |
 | PE-03 | Support three priorities (high, normal, low) | 3 | I | With a backlog, claim order follows the policy in ADR-0008 | Done |
 | PE-04 | Validate content before accepting it (required fields, per-channel length limits) | 2 | U | Table-driven tests per channel: missing fields, too long, bad recipient format | Done |
-| PE-05 | Prevent the same notification from being sent twice | 2, 3, 4 | I, F | Only the lease holder may complete a send; stale worker update is rejected; see ADR-0004 and ADR-0005 | Phase 3 part done |
+| PE-05 | Prevent the same notification from being sent twice | 2, 3, 4 | I, F | Only the lease holder may complete a send; stale worker update is rejected; every attempt carries the same Idempotency-Key; see ADR-0004 and ADR-0005 | Done |
 | PE-06 | Track status transitions so clients see progress | 3 | U, I | Allowed transitions enforced; illegal ones rejected | Done |
 
 ## 3. Delivery and retry logic (design left to the candidate)
@@ -44,13 +44,13 @@ will write. Status is updated at the end of each phase.
 | ID | Requirement (our design) | Phase | Test | Evidence | Status |
 |----|--------------------------|-------|------|----------|--------|
 | DR-01 | Call the external provider (webhook.site URL from config) with the agreed JSON body; treat 202 + `messageId` as accepted | 3 | U, E | Client test against an `httptest` server; real notification visible on webhook.site | Done |
-| DR-02 | Classify failures as transient (network, timeout, 5xx, 429) or permanent (other 4xx) | 4 | U | Table-driven classification test | Planned |
-| DR-03 | Retry transient failures with capped exponential backoff and jitter | 4 | U | Delay stays within bounds for each attempt (seeded random source) | Planned |
-| DR-04 | Stop after a maximum number of attempts and park the message in a dead-letter state | 4 | F | Always-failing provider ends in `failed` with the last error recorded | Planned |
-| DR-05 | Recover messages held by a crashed worker (lease / visibility timeout) | 4 | I | Claimed row with an expired lease is claimed again and delivered | Planned |
-| DR-06 | Retries go through the same rate limiter as first attempts | 4 | F | Flaky provider under load still respects PE-02 | Planned |
-| DR-07 | Bound every provider call with a timeout | 3, 4 | F | Slow provider causes a timeout and a retry, not a stuck worker | Phase 3 part done |
-| DR-08 | Shut down gracefully: stop claiming, finish or release in-flight work | 1, 4 | I | After shutdown no row stays in `processing` with a live lease | Phase 3 part done |
+| DR-02 | Classify failures as transient (network, timeout, 5xx, 429) or permanent (other 4xx) | 4 | U | Table-driven classification test | Done |
+| DR-03 | Retry transient failures with capped exponential backoff and jitter | 4 | U | Delay stays within bounds for each attempt (pinned random source) | Done |
+| DR-04 | Stop after a maximum number of attempts and park the message in a dead-letter state | 4 | F | Always-failing provider ends in `failed` with the last error recorded | Done |
+| DR-05 | Recover messages held by a crashed worker (lease / visibility timeout) | 4 | I | Claimed row with an expired lease is claimed again and delivered | Done |
+| DR-06 | Retries go through the same rate limiter as first attempts | 4 | F | Flaky provider under load still respects PE-02 | Done |
+| DR-07 | Bound every provider call with a timeout | 3, 4 | F | Slow provider causes a timeout and a retry, not a stuck worker | Done |
+| DR-08 | Shut down gracefully: stop claiming, finish or release in-flight work | 1, 4 | I | After shutdown no row stays in `processing` with a live lease | Done |
 
 ## 4. Observability
 
@@ -69,7 +69,7 @@ will write. Status is updated at the end of each phase.
 |----|---------------------------|-------|------|----------|--------|
 | NFR-01 | Handle millions of notifications per day | 0, 5 | D, E | Capacity reasoning in ADR-0001; load script numbers in the README | Planned |
 | NFR-02 | Absorb traffic bursts without dropping requests | 3, 5 | E | Large batch is accepted quickly; queue drains at the rate limit | Phase 3 part done |
-| NFR-03 | Reliable delivery (no silent loss) | 4 | I, F | At-least-once semantics per ADR-0005 | Planned |
+| NFR-03 | Reliable delivery (no silent loss) | 4 | I, F | At-least-once semantics per ADR-0005 | Done |
 | NFR-04 | Status visible to API consumers and internal teams | 2, 5 | H, E | Status endpoints plus metrics and logs | Phase 2 part done |
 | NFR-05 | Implemented in Go 1.2x | 1 | D | `go.mod` Go version | Done |
 
@@ -88,7 +88,7 @@ will write. Status is updated at the end of each phase.
 
 | ID | Bonus (paraphrased) | Plan | Phase | Test |
 |----|---------------------|------|-------|------|
-| BON-01 | Failure handling | Dead-letter state is part of the core design (DR-04). Circuit breaker per channel only after approval. | 4 | F |
+| BON-01 | Failure handling | Dead-letter state is part of the core design (DR-04), done in Phase 4. Circuit breaker per channel approved as Phase 4b (ADR-0014). | 4, 4b | F |
 | BON-02 | Scheduled notifications (send at a future time) | Only if ahead of schedule. Schema already supports it through `next_attempt_at`. | 4+ | I |
 | BON-03 | Message templates with variables | Out of scope unless requested | - | - |
 | BON-04 | Real-time status via WebSocket | Out of scope unless requested | - | - |

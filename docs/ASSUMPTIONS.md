@@ -13,6 +13,9 @@ an open design decision point to the ADR.
 | A-03 | Limits of webhook.site | webhook.site is used for the functional demo only. Load and failure tests use the in-repo mock provider. A static configured response returns the same `messageId` every time, so we never rely on it being unique. | The free tier has request quotas, and a fixed response body cannot generate unique IDs. | Accepted |
 | A-04 | Provider authentication | None. The provider URL comes from the `PROVIDER_URL` environment variable. | The brief describes no credentials. | Accepted |
 | A-05 | How failures should be classified | Transient: network error, timeout, 408, 429, 5xx. Permanent: any other 4xx and unexpected non-2xx codes. Details in ADR-0002. | Standard HTTP semantics. | Accepted |
+| A-30 | How to treat a provider's `Retry-After` | Accepted as seconds or an HTTP date, on any retryable failure. It is the minimum wait before the next attempt, still capped at `RETRY_MAX_DELAY`. Invalid values are ignored. | Retrying sooner would be refused again; the cap stops a provider from parking messages for hours. | Proposed |
+| A-31 | What is kept about failed attempts | Only the last error (`last_error`: status code plus the first 200 characters of the body, never the provider URL) and the attempt count. No per-attempt history table. | Enough to debug a dead letter; a history table would add a write per attempt. Logs hold the full history per correlation ID. | Proposed |
+| A-32 | A send succeeds but recording the result fails | The row stays `processing`, its lease expires, and it is sent again: a possible duplicate, accepted under at-least-once delivery (ADR-0005). | The alternative, marking it sent before the call, can lose messages silently. | Proposed |
 
 ## Content and validation
 

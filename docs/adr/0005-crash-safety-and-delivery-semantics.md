@@ -59,3 +59,10 @@ rolls back on its own.
 - The README states the semantics plainly: at-least-once, with a narrow duplicate window on a crash
   or an ambiguous timeout.
 - A crash delays the affected messages by up to one lease period.
+
+## Amendment (2026-11-05, Phase 4)
+
+Built as decided. Two details (ADR-0014): rows released at graceful shutdown get their attempt back,
+since they were never sent; and a row whose lease expires on its final attempt is moved to `failed`
+instead of being claimed past `max_attempts`. If the result write after a send fails, the row stays
+`processing` and is sent again after the lease expires (ASSUMPTIONS A-32).

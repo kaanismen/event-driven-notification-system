@@ -54,3 +54,12 @@ So the retry window should be minutes, not hours.
 - A manual "requeue from dead letter" endpoint is not planned. It is a possible extension.
 - A per-channel circuit breaker (bonus) would pause claiming during a provider outage instead of
   using up attempts. Only built after approval.
+
+## Amendment (2026-11-05, Phase 4)
+
+Built as decided, with two details settled during the build (ADR-0014):
+
+- `Retry-After` is honored on any retryable failure that carries it (503 often does too), not only
+  on 429. It is a minimum wait and is still capped at `RETRY_MAX_DELAY` (ASSUMPTIONS A-30).
+- Settings: `RETRY_BASE_DELAY` (default 2s) and `RETRY_MAX_DELAY` (default 5m, at most 1h).
+  `MAX_ATTEMPTS` already existed and is copied into each row at creation.

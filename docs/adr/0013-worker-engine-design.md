@@ -56,7 +56,8 @@ webhook.site. Phase 4 adds failure modes to it.
 - Shutdown: dispatchers stop claiming at once. A send that has started finishes and records its
   result, because abandoning a request the provider may have accepted creates a duplicate later.
   Rows claimed but not yet handed to a sender stay `processing` until their lease expires and any
-  worker reclaims them; Phase 4 releases them immediately instead.
+  worker reclaims them; Phase 4 releases them immediately instead (done, ADR-0014).
 - The claim also picks up rows whose lease expired, ahead of the priority shares, since they have
   waited longest. Completion updates are already fenced on the claimed attempt (ADR-0005).
-- Until Phase 4, every delivery failure is final (`failed` with `last_error`).
+- Until Phase 4, every delivery failure is final (`failed` with `last_error`). Phase 4 added
+  retries (ADR-0002, ADR-0014).

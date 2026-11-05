@@ -45,8 +45,10 @@ stateDiagram-v2
     pending --> cancelled: cancel request
     processing --> sent: provider returned 2xx
     processing --> pending: transient error, next_attempt_at = now + backoff
-    processing --> pending: lease expired (worker crashed)
+    processing --> pending: lease expired (worker crashed), attempts left
+    processing --> pending: released at shutdown, attempt given back
     processing --> failed: permanent error or max attempts (dead-letter)
+    processing --> failed: lease expired on the final attempt
     sent --> [*]
     failed --> [*]
     cancelled --> [*]
@@ -66,8 +68,9 @@ stateDiagram-v2
 
 ## Worker flow (deliver)
 
-1. For each channel, one dispatcher goroutine claims a small batch (ADR-0013): first rows whose
-   lease expired, then due `pending` rows per priority level up to its weighted share, then any due
+1. For each channel, one dispatcher goroutine first dead-letters rows whose lease expired on their
+   final attempt, then claims a small batch (ADR-0013): first rows whose lease expired and that have
+   attempts left, then due `pending` rows per priority level up to its weighted share, then any due
    rows for unused share (ADR-0008). Each claim is one `FOR UPDATE SKIP LOCKED` statement that sets
    `status = processing`, `locked_until = now() + lease` and `attempts = attempts + 1`. Rows go to a
    pool of sender goroutines over an unbuffered Go channel, so nothing is claimed far ahead.
@@ -78,12 +81,15 @@ stateDiagram-v2
    If the lease expired and another worker took the row, this update matches nothing and is logged
    instead of overwriting newer state (ADR-0005).
    - 2xx: `sent`, store `provider_message_id`.
-   - Transient error and attempts left: back to `pending` with `next_attempt_at = now() + backoff with jitter` (ADR-0002).
+   - Transient error and attempts left: back to `pending` with `next_attempt_at = now() + backoff with jitter`,
+     never sooner than the provider's `Retry-After` (ADR-0002, A-30). The retry comes back through
+     the normal claim, so it passes the same rate limiter as a first attempt.
    - Permanent error or no attempts left: `failed` with `last_error` (the dead-letter state).
 4. When the queue is empty, the dispatcher sleeps for a short poll interval. When a claim returns a
    full batch, it claims again immediately.
 5. On shutdown (SIGTERM), dispatchers stop claiming, in-flight sends finish within a deadline, and
-   claimed rows that were not sent are released back to `pending`.
+   claimed rows that were not sent are released back to `pending` with their attempt given back
+   (ADR-0014).
 
 ## Data model (indicative, finalized in Phases 1-2)
 
