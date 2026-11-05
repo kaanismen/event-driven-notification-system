@@ -136,6 +136,9 @@ func testConfig() config.Worker {
 		RatePerSecond: 100, SendersPerChannel: 50, ClaimBatchSize: 20,
 		PollInterval: 20 * time.Millisecond, Lease: 30 * time.Second, PriorityWeights: [3]int{70, 20, 10},
 		RetryBaseDelay: time.Millisecond, RetryMaxDelay: 10 * time.Millisecond,
+		// High enough that the breaker stays out of tests about other behavior;
+		// breaker_test.go and TestBreakerSavesAttemptsDuringAnOutage cover it.
+		BreakerThreshold: 1000, BreakerCooldown: time.Second,
 	}
 }
 

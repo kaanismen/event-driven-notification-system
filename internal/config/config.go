@@ -44,6 +44,10 @@ type Worker struct {
 	// the wait after attempt n is random in [0, min(max, base*2^(n-1))].
 	RetryBaseDelay time.Duration
 	RetryMaxDelay  time.Duration
+	// BreakerThreshold transient failures in a row open a channel's circuit breaker
+	// for BreakerCooldown, after which one probe is sent (ADR-0015).
+	BreakerThreshold int
+	BreakerCooldown  time.Duration
 }
 
 // maxRetryDelay bounds RETRY_MAX_DELAY. Notifications are time-sensitive, so waits of
@@ -77,6 +81,10 @@ func Load(getenv func(string) string) (Config, error) {
 			PriorityWeights: p.weights("PRIORITY_WEIGHTS", [3]int{70, 20, 10}),
 			RetryBaseDelay:  p.duration("RETRY_BASE_DELAY", 2*time.Second),
 			RetryMaxDelay:   p.duration("RETRY_MAX_DELAY", 5*time.Minute),
+			// 10 in a row: a full outage trips it within a fraction of a second, while a
+			// provider that fails only now and then never does (retries handle that).
+			BreakerThreshold: p.integer("BREAKER_FAILURE_THRESHOLD", 10, 1, 1000),
+			BreakerCooldown:  p.duration("BREAKER_COOLDOWN", 30*time.Second),
 		},
 	}
 

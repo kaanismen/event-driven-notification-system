@@ -80,27 +80,35 @@ func (e *Engine) runChannel(ctx context.Context, ch notification.Channel) {
 	limiter := rate.NewLimiter(rate.Limit(e.cfg.RatePerSecond), 1)
 	// The token bucket paces; the window cap makes the per-second ceiling exact (see ratelimit.go).
 	limit := limits{pace: limiter, ceiling: newWindowCap(e.cfg.RatePerSecond, time.Second+windowMargin)}
-	jobs := make(chan notification.Notification)
+	brk := newBreaker(e.cfg.BreakerThreshold, e.cfg.BreakerCooldown, logger)
+	jobs := make(chan job)
 
 	var senders sync.WaitGroup
 	for range e.cfg.SendersPerChannel {
 		senders.Add(1)
 		go func() {
 			defer senders.Done()
-			for n := range jobs {
-				e.deliver(ctx, logger, limit, n)
+			for j := range jobs {
+				e.deliver(ctx, logger, limit, brk, j)
 			}
 		}()
 	}
 
 	logger.Info("channel started", "rate_per_second", e.cfg.RatePerSecond, "senders", e.cfg.SendersPerChannel)
-	e.dispatch(ctx, logger, ch, jobs)
+	e.dispatch(ctx, logger, ch, brk, jobs)
 	close(jobs) // lets the senders' range loops end
 	senders.Wait()
 	logger.Info("channel stopped")
 }
 
-func (e *Engine) dispatch(ctx context.Context, logger *slog.Logger, ch notification.Channel, jobs chan<- notification.Notification) {
+// job is one claimed row handed to a sender. probe marks the single message a half-open
+// circuit breaker lets through to test the provider.
+type job struct {
+	n     notification.Notification
+	probe bool
+}
+
+func (e *Engine) dispatch(ctx context.Context, logger *slog.Logger, ch notification.Channel, brk *breaker, jobs chan<- job) {
 	for ctx.Err() == nil {
 		if n, err := e.store.FailExhaustedLeases(ctx, ch); err != nil {
 			if ctx.Err() == nil {
@@ -110,12 +118,30 @@ func (e *Engine) dispatch(ctx context.Context, logger *slog.Logger, ch notificat
 			logger.Warn("dead-lettered rows whose worker stopped during their final attempt", "count", n)
 		}
 
+		// While the breaker is open nothing is claimed, so waiting messages keep their
+		// attempts instead of using them up against a provider that is down (ADR-0015).
+		probe, wait, ok := brk.gate()
+		if !ok {
+			if wait <= 0 {
+				wait = e.cfg.PollInterval // a probe is out; check again soon
+			}
+			sleep(ctx, wait)
+			continue
+		}
+		limit := e.cfg.ClaimBatchSize
+		if probe {
+			limit = 1
+		}
+
 		batch, err := e.store.Claim(ctx, store.ClaimParams{
 			Channel: ch,
-			Limit:   e.cfg.ClaimBatchSize,
+			Limit:   limit,
 			Weights: e.cfg.PriorityWeights,
 			Lease:   e.cfg.Lease,
 		})
+		if probe && (err != nil || len(batch) == 0) {
+			brk.abortProbe() // nothing to probe with; try again on the next round
+		}
 		if err != nil {
 			if ctx.Err() == nil {
 				logger.Error("claim failed", "error", err)
@@ -126,7 +152,7 @@ func (e *Engine) dispatch(ctx context.Context, logger *slog.Logger, ch notificat
 
 		for i, n := range batch {
 			select {
-			case jobs <- n:
+			case jobs <- job{n: n, probe: probe}:
 			case <-ctx.Done():
 				// Shutting down: hand the rows nobody started back to the queue now,
 				// instead of leaving them until their lease expires (ADR-0014).
@@ -140,13 +166,14 @@ func (e *Engine) dispatch(ctx context.Context, logger *slog.Logger, ch notificat
 
 		// A full batch suggests more work is waiting: claim again at once. Otherwise
 		// poll, so an idle channel costs a few cheap queries per second (ADR-0013).
-		if len(batch) < e.cfg.ClaimBatchSize {
+		if len(batch) < limit {
 			sleep(ctx, e.cfg.PollInterval)
 		}
 	}
 }
 
-func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits, n notification.Notification) {
+func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits, brk *breaker, j job) {
+	n := j.n
 	// Worker log lines carry the request ID of the API call that created the
 	// notification, so one search finds its whole history.
 	ctx = logging.WithRequestID(ctx, n.CorrelationID)
@@ -154,6 +181,16 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 
 	if err := limit.wait(ctx); err != nil {
 		// Shutting down before this row got a rate slot: it was never sent.
+		if j.probe {
+			brk.abortProbe()
+		}
+		e.release(ctx, logger, n)
+		return
+	}
+	if !j.probe && !brk.closed() {
+		// The breaker opened while this row waited for its rate slot. Hand it back with
+		// its attempt rather than send it into the outage.
+		logger.DebugContext(ctx, "circuit breaker open: row handed back unsent")
 		e.release(ctx, logger, n)
 		return
 	}
@@ -168,6 +205,7 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 		ID: n.ID, Channel: n.Channel, Recipient: n.Recipient, Content: n.Content, CorrelationID: n.CorrelationID,
 	})
 	elapsed := time.Since(start)
+	brk.record(j.probe, sendErr != nil && provider.Retryable(sendErr))
 
 	writeCtx, cancel := context.WithTimeout(keep, resultWriteTimeout)
 	defer cancel()
