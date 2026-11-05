@@ -4,7 +4,7 @@ A notification service in Go that accepts SMS, email and push notifications over
 and delivers them asynchronously through an external provider. It is built for bursts:
 the API stores work and answers at once, while workers drain the queue at a fixed rate of 100
 messages per second per channel, with priorities, retries, a dead-letter state, a circuit
-breaker per channel, scheduled sends and Prometheus metrics.
+breaker per channel, scheduled sends, message templates and Prometheus metrics.
 
 PostgreSQL is both the source of truth and the queue, so the whole system is one Go binary and
 one database.
@@ -105,6 +105,23 @@ curl localhost:8080/v1/notifications -H 'Content-Type: application/json' \
 curl localhost:8080/v1/notifications -H 'Content-Type: application/json' \
   -d '{"channel":"push","recipient":"device-token-abc","content":"The sale starts now","scheduledAt":"2026-11-06T09:00:00+03:00"}'
 ```
+
+**Use a template.** Store the text once, then send by template ID with the values. The text
+is filled in when the request arrives, and the notification stores the final text. Templates
+cannot be changed; a new wording is a new template.
+
+```sh
+curl localhost:8080/v1/templates -H 'Content-Type: application/json' \
+  -d '{"name":"otp","channel":"sms","body":"Hi {{name}}, your code is {{code}}"}'
+# 201 {"id":"019a5b70-...","name":"otp","channel":"sms","body":"...","variables":["name","code"],...}
+
+curl localhost:8080/v1/notifications -H 'Content-Type: application/json' \
+  -d '{"templateId":"019a5b70-...","recipient":"+905551234567","variables":{"name":"Ayşe","code":"4829"}}'
+# 202 {"content":"Hi Ayşe, your code is 4829","channel":"sms","templateId":"019a5b70-...",...}
+```
+
+A missing value, or a value the template does not use (usually a typo), is a `422`, and so is
+rendered text over the channel's limit. Batch items can use templates too.
 
 **Create a batch** of up to 1000 notifications, which may mix channels. All-or-nothing: one
 invalid item rejects the whole batch, and the error names it by `index`.
@@ -220,6 +237,7 @@ points in the brief, and the assumptions made about them, are in
 | Observability | Prometheus metrics, separate liveness and readiness, JSON logs with request IDs | [0016](docs/adr/0016-observability.md) |
 | Scheduling | Optional `scheduledAt`, stored as the first `next_attempt_at` | [0017](docs/adr/0017-scheduled-notifications.md) |
 | Docs and CI | Hand-written OpenAPI checked against the routes; GitHub Actions | [0018](docs/adr/0018-api-documentation-and-ci.md) |
+| Templates | Immutable templates with strict `{{name}}` placeholders, rendered when the request arrives | [0019](docs/adr/0019-message-templates.md) |
 
 ## Operations
 

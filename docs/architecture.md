@@ -60,8 +60,10 @@ stateDiagram-v2
    to every log line and echoes it in the response.
 2. The handler decodes JSON with a body size limit and validates the content (required fields,
    recipient format, per-channel length limit, and an optional `scheduledAt` that is at most 1
-   minute in the past and at most `MAX_SCHEDULE_AHEAD` ahead). Invalid input returns 422 with
-   field errors.
+   minute in the past and at most `MAX_SCHEDULE_AHEAD` ahead). A request that names a template
+   instead of sending `content` is rendered first, with every template of the request loaded in
+   one query, and the rendered text is then validated like any other (ADR-0019). Invalid input
+   returns 422 with field errors.
 3. If an `Idempotency-Key` header is present and already known, the handler returns the original
    resource (or 409 if the body differs). See ADR-0004.
 4. One transaction inserts the row(s) with `status = pending` and `next_attempt_at = now()`, or the
@@ -103,6 +105,10 @@ stateDiagram-v2
 (nullable, migration `000003`).
 
 `idempotency_keys`: `key` (primary key), `request_hash`, `resource_type`, `resource_id`, `created_at`.
+
+`templates` (migration `000004`): `id`, `name` (unique), `channel`, `body`, `created_at`. Rows are
+never updated or deleted. `notifications.template_id` references the template a row was rendered
+from.
 
 Main index: a partial index on `(channel, priority, next_attempt_at) WHERE status = 'pending'`, so
 the claim query only touches due rows and stays fast however many finished rows exist.
