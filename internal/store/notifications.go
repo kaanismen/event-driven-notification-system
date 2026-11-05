@@ -51,6 +51,9 @@ type CreateParams struct {
 	IdempotencyKey string
 	// RequestHash identifies the normalized request; required with IdempotencyKey.
 	RequestHash []byte
+	// TraceParent is the creating request's W3C traceparent, or "" if it was not traced
+	// (ADR-0021). It is stored on every row of the request.
+	TraceParent string
 }
 
 // CreateResult is what Create stored, or what an earlier request with the same key
@@ -69,7 +72,8 @@ const (
 // notificationColumns is the column list every read uses, in scanNotification order.
 const notificationColumns = `id, batch_id, channel, recipient, content, priority, status,
 	attempts, max_attempts, next_attempt_at, last_error, provider_message_id,
-	correlation_id, created_at, updated_at, sent_at, scheduled_at, template_id, version`
+	correlation_id, created_at, updated_at, sent_at, scheduled_at, template_id, version,
+	trace_parent`
 
 // insertNotifications inserts any number of rows with one fixed statement: each column
 // arrives as an array and unnest turns the arrays back into rows. This avoids building
@@ -79,9 +83,9 @@ const notificationColumns = `id, batch_id, channel, recipient, content, priority
 // final: a templated request was rendered before it got here (ADR-0019).
 const insertNotifications = `
 INSERT INTO notifications (id, batch_id, channel, recipient, content, priority, max_attempts, correlation_id,
-                           scheduled_at, next_attempt_at, template_id)
+                           scheduled_at, next_attempt_at, template_id, trace_parent)
 SELECT t.id, $2::uuid, t.channel, t.recipient, t.content, t.priority, $7::int, $8::text,
-       t.scheduled_at, coalesce(t.scheduled_at, now()), t.template_id
+       t.scheduled_at, coalesce(t.scheduled_at, now()), t.template_id, nullif($11::text, '')
 FROM unnest($1::uuid[], $3::text[], $4::text[], $5::text[], $6::smallint[], $9::timestamptz[], $10::uuid[])
     AS t(id, channel, recipient, content, priority, scheduled_at, template_id)
 RETURNING ` + notificationColumns
@@ -168,7 +172,7 @@ func (s *Store) Create(ctx context.Context, p CreateParams) (CreateResult, error
 	}
 
 	rows, err := tx.Query(ctx, insertNotifications,
-		idText, batchArg, channels, recipients, contents, priorities, p.MaxAttempts, p.CorrelationID, scheduled, templates)
+		idText, batchArg, channels, recipients, contents, priorities, p.MaxAttempts, p.CorrelationID, scheduled, templates, p.TraceParent)
 	if err != nil {
 		return CreateResult{}, fmt.Errorf("insert notifications: %w", err)
 	}
@@ -293,10 +297,12 @@ func scanNotification(row pgx.Row) (notification.Notification, error) {
 		channel, status                    string
 		priority                           int16
 		lastError, providerID, correlation *string
+		traceParent                        *string
 	)
 	err := row.Scan(&n.ID, &batchID, &channel, &n.Recipient, &n.Content, &priority, &status,
 		&n.Attempts, &n.MaxAttempts, &n.NextAttemptAt, &lastError, &providerID,
-		&correlation, &n.CreatedAt, &n.UpdatedAt, &n.SentAt, &n.ScheduledAt, &templateID, &n.Version)
+		&correlation, &n.CreatedAt, &n.UpdatedAt, &n.SentAt, &n.ScheduledAt, &templateID, &n.Version,
+		&traceParent)
 	if err != nil {
 		return notification.Notification{}, err
 	}
@@ -315,6 +321,7 @@ func scanNotification(row pgx.Row) (notification.Notification, error) {
 	n.LastError = deref(lastError)
 	n.ProviderMessageID = deref(providerID)
 	n.CorrelationID = deref(correlation)
+	n.TraceParent = deref(traceParent)
 
 	// pgx returns times in the process's local zone; the API always speaks UTC (A-12).
 	n.NextAttemptAt = n.NextAttemptAt.UTC()

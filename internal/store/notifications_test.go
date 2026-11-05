@@ -280,3 +280,35 @@ func TestConcurrentDuplicateKeys(t *testing.T) {
 		t.Errorf("rows = %d, want 1", n)
 	}
 }
+
+// The creating request's traceparent travels with every row and comes back on claim, so
+// the worker can link its delivery span to the request (ADR-0021).
+func TestTraceParentIsStoredAndClaimed(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const tp = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+	req := notification.Request{Channel: notification.ChannelSMS, Recipient: "+905551234567", Content: "x"}.Normalized()
+	res, err := s.Create(ctx, CreateParams{Requests: []notification.Request{req, req}, Batch: true, MaxAttempts: 8, TraceParent: tp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range res.Notifications {
+		if n.TraceParent != tp {
+			t.Errorf("stored traceparent = %q, want %q", n.TraceParent, tp)
+		}
+	}
+	if claimed := claimSMS(t, s, 10); len(claimed) != 2 || claimed[0].TraceParent != tp {
+		t.Errorf("claimed rows lost the traceparent: %+v", claimed)
+	}
+
+	untraced, err := s.Create(ctx, CreateParams{Requests: []notification.Request{req}, MaxAttempts: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var isNull bool
+	if err := s.pool.QueryRow(ctx, `SELECT trace_parent IS NULL FROM notifications WHERE id = $1`,
+		untraced.Notifications[0].ID.String()).Scan(&isNull); err != nil || !isNull {
+		t.Errorf("untraced row: trace_parent IS NULL = %t (err %v), want NULL, not ''", isNull, err)
+	}
+}

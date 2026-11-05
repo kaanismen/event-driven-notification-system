@@ -118,6 +118,7 @@ type Notification struct {
 	LastError         string // empty when no attempt has failed
 	ProviderMessageID string // empty until the provider accepts the message
 	CorrelationID     string // request ID of the API call that created it
+	TraceParent       string // W3C traceparent of that API call, if traced (ADR-0021)
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	SentAt            *time.Time
