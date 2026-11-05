@@ -47,6 +47,12 @@ type Engine struct {
 	metrics *metrics.Metrics
 	cfg     config.Worker
 	backoff backoff
+
+	// sendStarted, when set, is told the exact time the rate limiter admitted each send.
+	// Only tests set it: they check the 100-per-second ceiling on these times, which is
+	// what the engine controls, instead of only on arrival times at a mock provider,
+	// which also include goroutine scheduling and network jitter (ADR-0003).
+	sendStarted func(ch notification.Channel, at time.Time)
 }
 
 // New returns an engine; call Run to start it.
@@ -186,7 +192,8 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 	ctx = logging.WithRequestID(ctx, n.CorrelationID)
 	logger = logger.With("notification_id", n.ID.String(), "attempt", n.Attempts)
 
-	if err := limit.wait(ctx); err != nil {
+	admitted, err := limit.wait(ctx)
+	if err != nil {
 		// Shutting down before this row got a rate slot: it was never sent.
 		if j.probe {
 			brk.abortProbe()
@@ -200,6 +207,9 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 		logger.DebugContext(ctx, "circuit breaker open: row handed back unsent")
 		e.release(ctx, logger, n, metrics.ReleaseBreaker)
 		return
+	}
+	if e.sendStarted != nil {
+		e.sendStarted(n.Channel, admitted)
 	}
 
 	// From here on, finish even if shutdown starts: cancelling a request the provider
@@ -325,9 +335,11 @@ type limits struct {
 	ceiling *windowCap    // guarantees at most rate sends in any one-second window
 }
 
-func (l limits) wait(ctx context.Context) error {
+// wait blocks until both controls allow one more send and returns the moment the
+// window cap recorded for it.
+func (l limits) wait(ctx context.Context) (time.Time, error) {
 	if err := l.pace.Wait(ctx); err != nil {
-		return err
+		return time.Time{}, err
 	}
-	return l.ceiling.Wait(ctx)
+	return l.ceiling.wait(ctx)
 }

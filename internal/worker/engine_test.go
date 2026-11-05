@@ -184,6 +184,48 @@ func maxPerWindow(times []time.Time, width time.Duration) int {
 	return best
 }
 
+// startTimes collects the admission times the engine reports through sendStarted.
+type startTimes struct {
+	mu        sync.Mutex
+	byChannel map[notification.Channel][]time.Time
+}
+
+func newStartTimes() *startTimes {
+	return &startTimes{byChannel: map[notification.Channel][]time.Time{}}
+}
+
+func (s *startTimes) record(ch notification.Channel, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.byChannel[ch] = append(s.byChannel[ch], at)
+}
+
+func (s *startTimes) get(ch notification.Channel) []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Time(nil), s.byChannel[ch]...)
+}
+
+// checkCeiling checks the 100-per-second limit twice (ADR-0003):
+//
+//   - Exactly, on the times the engine admitted sends. This is what the engine controls,
+//     and it must never exceed 100 in any one-second window.
+//   - At the provider, where requests arrive after goroutine scheduling and the network
+//     have added jitter that no sender can control. The 10 ms window margin absorbs that
+//     almost always; under heavy CPU load (the whole suite in parallel) one request in
+//     about seven runs crossed a window edge, so arrival allows one extra and is logged.
+func checkCeiling(t *testing.T, label string, starts, arrivals []time.Time) {
+	t.Helper()
+	startPeak, arrivalPeak := maxPerWindow(starts, time.Second), maxPerWindow(arrivals, time.Second)
+	t.Logf("%s: peak %d sends started and %d arrived in any 1 s window", label, startPeak, arrivalPeak)
+	if startPeak > 100 {
+		t.Errorf("%s: the engine started %d sends within one second, limit is 100", label, startPeak)
+	}
+	if arrivalPeak > 101 {
+		t.Errorf("%s: %d requests arrived within one second; more than scheduling jitter explains", label, arrivalPeak)
+	}
+}
+
 // TestRateLimitPerChannel sends 250 messages on each of the three channels at once. Each
 // channel must stay at or under 100 per second, and the channels must not slow each
 // other down: together they should finish in about 2.5 s, not 7.5 s.
@@ -202,6 +244,8 @@ func TestRateLimitPerChannel(t *testing.T) {
 	defer srv.Close()
 
 	e := New(f, provider.NewClient(srv.URL, 5*time.Second), slog.New(slog.DiscardHandler), metrics.New(), testConfig())
+	starts := newStartTimes()
+	e.sendStarted = starts.record
 	elapsed := runUntilDone(t, e, f, 15*time.Second)
 
 	byChannel := map[string][]time.Time{}
@@ -212,12 +256,7 @@ func TestRateLimitPerChannel(t *testing.T) {
 		if len(times) != perChannel {
 			t.Errorf("%s: provider got %d requests, want %d", c, len(times), perChannel)
 		}
-		// Measured where it matters: when requests arrive at the provider.
-		peak := maxPerWindow(times, time.Second)
-		t.Logf("%s: peak %d requests in any 1 s window", c, peak)
-		if peak > 100 {
-			t.Errorf("%s: %d requests within one second, limit is 100", c, peak)
-		}
+		checkCeiling(t, c, starts.get(notification.Channel(c)), times)
 		if span := times[len(times)-1].Sub(times[0]); span < 2300*time.Millisecond {
 			t.Errorf("%s: %d requests took only %v; the limit was not applied", c, perChannel, span)
 		}

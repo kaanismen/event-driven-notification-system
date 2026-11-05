@@ -62,17 +62,21 @@ func enqueue(t *testing.T, st *store.Store, n, maxAttempts int) []uuid.UUID {
 
 // startEngine runs an engine against a mock provider and returns the mock and a stop
 // function that cancels the engine and waits for it to return.
-func startEngine(t *testing.T, st *store.Store, opts mock.Options, cfg config.Worker, providerTimeout time.Duration) (*mock.Server, func()) {
+func startEngine(t *testing.T, st *store.Store, opts mock.Options, cfg config.Worker, providerTimeout time.Duration, setup ...func(*Engine)) (*mock.Server, func()) {
 	t.Helper()
 	m := mock.NewRecorder(opts)
-	return m, startEngineWith(t, st, m, cfg, providerTimeout)
+	return m, startEngineWith(t, st, m, cfg, providerTimeout, setup...)
 }
 
-// startEngineWith is startEngine with any provider handler.
-func startEngineWith(t *testing.T, st *store.Store, h http.Handler, cfg config.Worker, providerTimeout time.Duration) func() {
+// startEngineWith is startEngine with any provider handler. setup functions adjust the
+// engine before it starts, for example to observe send start times.
+func startEngineWith(t *testing.T, st *store.Store, h http.Handler, cfg config.Worker, providerTimeout time.Duration, setup ...func(*Engine)) func() {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	e := New(st, provider.NewClient(srv.URL, providerTimeout), slog.New(slog.DiscardHandler), metrics.New(), cfg)
+	for _, f := range setup {
+		f(e)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
@@ -291,7 +295,9 @@ func TestRetriesRespectTheRateLimit(t *testing.T) {
 	}
 	st := newRealStore(t)
 	ids := enqueue(t, st, 150, 8)
-	m, _ := startEngine(t, st, mock.Options{FailFirst: 1}, fastRetries(), time.Second)
+	starts := newStartTimes()
+	m, _ := startEngine(t, st, mock.Options{FailFirst: 1}, fastRetries(), time.Second,
+		func(e *Engine) { e.sendStarted = starts.record })
 
 	final := waitFinal(t, st, ids, 15*time.Second)
 	for _, id := range ids {
@@ -306,11 +312,10 @@ func TestRetriesRespectTheRateLimit(t *testing.T) {
 	if len(times) != 300 {
 		t.Errorf("provider got %d requests, want 300 (150 failures, 150 successes)", len(times))
 	}
-	peak := maxPerWindow(times, time.Second)
-	t.Logf("peak %d requests in any 1 s window, retries included", peak)
-	if peak > 100 {
-		t.Errorf("%d requests within one second, limit is 100", peak)
+	if n := len(starts.get(notification.ChannelSMS)); n != 300 {
+		t.Errorf("engine reported %d send starts, want 300", n)
 	}
+	checkCeiling(t, "sms, retries included", starts.get(notification.ChannelSMS), times)
 }
 
 // TestShutdownReleasesUnsentRows: with a slow rate, most claimed rows are still waiting
