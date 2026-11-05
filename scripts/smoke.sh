@@ -127,6 +127,24 @@ check POST /v1/notifications 422 '{"channel":"push","recipient":"device-token-ab
 # An hour away it cannot have been sent yet, so the cancel must succeed.
 check POST "/v1/notifications/$scheduled/cancel" 200
 
+echo "== templates"
+# RUN_ID makes the name unique per run: templates are immutable and names are unique.
+tpl_body="{\"name\":\"$RUN_ID-otp\",\"channel\":\"sms\",\"body\":\"Hi {{name}}, your code is {{code}}\"}"
+check POST /v1/templates 201 "$tpl_body"
+tpl="$(field id)"
+check POST /v1/templates 200 "$tpl_body"
+require_header "Idempotent-Replayed: true"
+check POST /v1/templates 409 "{\"name\":\"$RUN_ID-otp\",\"channel\":\"sms\",\"body\":\"Changed {{code}}\"}"
+check POST /v1/templates 422 '{"name":"bad name","channel":"sms","body":"Hi {{first name}}"}'
+check GET "/v1/templates/$tpl" 200
+check GET "/v1/templates?channel=sms&limit=1" 200
+check POST /v1/notifications 202 "{\"templateId\":\"$tpl\",\"recipient\":\"+905551234567\",\"variables\":{\"name\":\"Kaan\",\"code\":\"4829\"}}"
+if [ "$(field content)" != "Hi Kaan, your code is 4829" ] || [ "$(field templateId)" != "$tpl" ]; then
+	echo "FAIL templated notification: content \"$(field content)\", templateId $(field templateId)" >&2
+	exit 1
+fi
+check POST /v1/notifications 422 "{\"templateId\":\"$tpl\",\"recipient\":\"+905551234567\",\"variables\":{\"name\":\"Kaan\"}}"
+
 echo "== list"
 check GET "/v1/notifications?limit=2" 200
 cursor="$(field nextCursor)"
