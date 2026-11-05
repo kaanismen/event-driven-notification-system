@@ -40,7 +40,16 @@ type Worker struct {
 	// PriorityWeights are the shares for high, normal and low when a channel has a
 	// backlog. Every weight must be at least 1, so no level can starve.
 	PriorityWeights [3]int
+	// RetryBaseDelay and RetryMaxDelay shape the backoff between attempts (ADR-0002):
+	// the wait after attempt n is random in [0, min(max, base*2^(n-1))].
+	RetryBaseDelay time.Duration
+	RetryMaxDelay  time.Duration
 }
+
+// maxRetryDelay bounds RETRY_MAX_DELAY. Notifications are time-sensitive, so waits of
+// hours are a misconfiguration; the bound also keeps the backoff arithmetic far from
+// overflowing a Duration.
+const maxRetryDelay = time.Hour
 
 // Load reads the configuration through getenv (os.Getenv in production, a map lookup in
 // tests). It reports every invalid setting at once, so a misconfigured deployment fails
@@ -66,6 +75,8 @@ func Load(getenv func(string) string) (Config, error) {
 			PollInterval:    p.duration("POLL_INTERVAL", 250*time.Millisecond),
 			Lease:           p.duration("LEASE_DURATION", 30*time.Second),
 			PriorityWeights: p.weights("PRIORITY_WEIGHTS", [3]int{70, 20, 10}),
+			RetryBaseDelay:  p.duration("RETRY_BASE_DELAY", 2*time.Second),
+			RetryMaxDelay:   p.duration("RETRY_MAX_DELAY", 5*time.Minute),
 		},
 	}
 
@@ -80,6 +91,12 @@ func Load(getenv func(string) string) (Config, error) {
 	} else if u, err := url.Parse(cfg.ProviderURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		// The value is not repeated in the error: it may contain a secret token.
 		p.fail("PROVIDER_URL must be an absolute http or https URL")
+	}
+
+	if r := cfg.Worker; r.RetryMaxDelay > maxRetryDelay {
+		p.fail("RETRY_MAX_DELAY must be at most %s, got %s", maxRetryDelay, r.RetryMaxDelay)
+	} else if r.RetryBaseDelay > r.RetryMaxDelay {
+		p.fail("RETRY_BASE_DELAY (%s) must not exceed RETRY_MAX_DELAY (%s)", r.RetryBaseDelay, r.RetryMaxDelay)
 	}
 
 	// A claimed row must not outlive its lease while it waits: in the worst case it waits

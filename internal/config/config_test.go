@@ -40,6 +40,8 @@ func TestLoadDefaults(t *testing.T) {
 			PollInterval:      250 * time.Millisecond,
 			Lease:             30 * time.Second,
 			PriorityWeights:   [3]int{70, 20, 10},
+			RetryBaseDelay:    2 * time.Second,
+			RetryMaxDelay:     5 * time.Minute,
 		},
 	}
 	if cfg != want {
@@ -61,6 +63,8 @@ func TestLoadOverrides(t *testing.T) {
 		"POLL_INTERVAL":         "1s",
 		"LEASE_DURATION":        "1m",
 		"PRIORITY_WEIGHTS":      " 5, 3 ,2 ",
+		"RETRY_BASE_DELAY":      "100ms",
+		"RETRY_MAX_DELAY":       "30s",
 	}))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -69,7 +73,8 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.HTTPAddr != ":9090" || cfg.LogLevel != slog.LevelDebug || cfg.ShutdownTimeout != 3*time.Second ||
 		cfg.MaxAttempts != 3 || cfg.DBMaxConns != 40 || cfg.ProviderTimeout != 2*time.Second ||
 		w.RatePerSecond != 10 || w.SendersPerChannel != 5 || w.ClaimBatchSize != 5 ||
-		w.PollInterval != time.Second || w.Lease != time.Minute || w.PriorityWeights != [3]int{5, 3, 2} {
+		w.PollInterval != time.Second || w.Lease != time.Minute || w.PriorityWeights != [3]int{5, 3, 2} ||
+		w.RetryBaseDelay != 100*time.Millisecond || w.RetryMaxDelay != 30*time.Second {
 		t.Errorf("unexpected config: %+v", cfg)
 	}
 }
@@ -102,6 +107,8 @@ func TestLoadReportsAllErrors(t *testing.T) {
 		{"zero weight could starve a level", map[string]string{"PRIORITY_WEIGHTS": "70,30,0"}, []string{"PRIORITY_WEIGHTS"}},
 		{"provider url not http", map[string]string{"PROVIDER_URL": "ftp://example.com/x"}, []string{"absolute http or https"}},
 		{"provider url relative", map[string]string{"PROVIDER_URL": "/hook"}, []string{"absolute http or https"}},
+		{"retry cap too long", map[string]string{"RETRY_MAX_DELAY": "2h"}, []string{"RETRY_MAX_DELAY must be at most"}},
+		{"retry base above cap", map[string]string{"RETRY_BASE_DELAY": "10m"}, []string{"must not exceed RETRY_MAX_DELAY"}},
 		{"lease shorter than the worst wait", map[string]string{"LEASE_DURATION": "10s"}, []string{"LEASE_DURATION"}},
 	}
 	for _, tt := range tests {
