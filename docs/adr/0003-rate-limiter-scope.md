@@ -72,3 +72,17 @@ rate to 99/s, (c) keep it and document the 101. **Chosen: (a).**
   sends per 1.01 s, roughly 99 per second sustained).
 - No client-side limiter can fully control arrival times at a remote provider. The honest claim is:
   exact at our boundary, with headroom for jitter.
+
+## Amendment (2026-11-05, Phase 5b): what the tests prove
+
+The window cap is exact for the moments the engine **starts** sends. Between that moment and the
+provider receiving the request, goroutine scheduling and the network add jitter that no sender can
+control; the 10 ms margin absorbs it almost always. With the test suite grown to nine packages
+running in parallel, one full run in seven saw 101 arrivals in one second at the mock provider.
+
+Options: (A) widen the margin to 20 ms, (B) check the guarantee exactly where the engine controls
+it and keep the provider-side check with a tolerance of one, (C) run timing tests in a separate,
+sequential step. **Decision: B** (chosen by the maintainer). The engine reports each admission time
+to tests through an unexported hook; the tests require at most 100 starts in any one-second window
+(deterministic) and at most 101 arrivals at the mock (jitter), logging both peaks. The margin stays
+at 10 ms as headroom for real network jitter.
