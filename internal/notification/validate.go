@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 // Request is what a client asks us to send. The rules follow ASSUMPTIONS A-06, A-07 and
@@ -20,6 +22,9 @@ type Request struct {
 	// omitempty keeps the idempotency hash of unscheduled requests identical to the
 	// hash stored before scheduling existed, so their replays still match.
 	ScheduledAt *time.Time `json:",omitempty"`
+	// TemplateID names the template Content was rendered from (ADR-0019); nil for plain
+	// content. omitempty keeps older idempotency hashes valid, as for ScheduledAt.
+	TemplateID *uuid.UUID `json:",omitempty"`
 }
 
 // FieldError describes one invalid field, in terms a client can act on.

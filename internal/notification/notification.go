@@ -112,6 +112,7 @@ type Notification struct {
 	MaxAttempts       int
 	NextAttemptAt     time.Time
 	ScheduledAt       *time.Time // nil unless the client asked for a send time (ADR-0017)
+	TemplateID        *uuid.UUID // the template Content was rendered from (ADR-0019), if any
 	LastError         string     // empty when no attempt has failed
 	ProviderMessageID string     // empty until the provider accepts the message
 	CorrelationID     string     // request ID of the API call that created it
