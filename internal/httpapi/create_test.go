@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kaanismen/insider-assessment/internal/notification"
-	"github.com/kaanismen/insider-assessment/internal/store"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/store"
 )
 
 const validSMS = `{"channel":"sms","recipient":"+905551234567","content":"Your code is 1234","priority":"high"}`

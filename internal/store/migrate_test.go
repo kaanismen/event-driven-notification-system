@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/kaanismen/insider-assessment/internal/testdb"
+	"github.com/kaanismen/event-driven-notification-system/internal/testdb"
 )
 
 func discardLogger() *slog.Logger {

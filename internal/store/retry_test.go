@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kaanismen/insider-assessment/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 )
 
 func TestMarkRetrySchedulesTheNextAttempt(t *testing.T) {

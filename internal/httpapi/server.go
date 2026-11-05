@@ -11,9 +11,9 @@ import (
 	"github.com/google/uuid"
 
 	// Aliased because this package already has a type named api.
-	openapi "github.com/kaanismen/insider-assessment/api"
-	"github.com/kaanismen/insider-assessment/internal/notification"
-	"github.com/kaanismen/insider-assessment/internal/store"
+	openapi "github.com/kaanismen/event-driven-notification-system/api"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/store"
 )
 
 // Store is what the handlers need from persistence. It is declared here, where it is

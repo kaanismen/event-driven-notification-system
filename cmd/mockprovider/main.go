@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kaanismen/insider-assessment/internal/logging"
-	"github.com/kaanismen/insider-assessment/internal/provider/mock"
+	"github.com/kaanismen/event-driven-notification-system/internal/logging"
+	"github.com/kaanismen/event-driven-notification-system/internal/provider/mock"
 )
 
 func main() {

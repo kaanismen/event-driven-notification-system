@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kaanismen/insider-assessment/internal/notification"
-	"github.com/kaanismen/insider-assessment/internal/provider/mock"
-	"github.com/kaanismen/insider-assessment/internal/store"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/provider/mock"
+	"github.com/kaanismen/event-driven-notification-system/internal/store"
 )
 
 // TestScheduledNotificationIsNotSentEarly runs the real engine: a notification scheduled

@@ -1,4 +1,4 @@
-module github.com/kaanismen/insider-assessment
+module github.com/kaanismen/event-driven-notification-system
 
 go 1.26.0
 

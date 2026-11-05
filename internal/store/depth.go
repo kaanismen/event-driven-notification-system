@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kaanismen/insider-assessment/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 )
 
 // Queue states reported by QueueDepth. They are the open statuses, except that pending

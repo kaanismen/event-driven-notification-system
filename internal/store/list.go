@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kaanismen/insider-assessment/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 )
 
 // Cursor is a position in the list order (created_at DESC, id DESC): the last row of

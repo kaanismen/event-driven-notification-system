@@ -25,4 +25,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/kaanismen/insider-assessment
+        - github.com/kaanismen/event-driven-notification-system

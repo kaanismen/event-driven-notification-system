@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/kaanismen/insider-assessment/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 )
 
 // NotCancellableError means the notification exists but has left the pending state, so

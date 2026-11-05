@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kaanismen/insider-assessment/internal/notification"
-	"github.com/kaanismen/insider-assessment/internal/store"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/store"
 )
 
 func sampleNotification(status notification.Status) notification.Notification {

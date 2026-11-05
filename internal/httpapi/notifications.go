@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/kaanismen/insider-assessment/internal/logging"
-	"github.com/kaanismen/insider-assessment/internal/notification"
-	"github.com/kaanismen/insider-assessment/internal/store"
+	"github.com/kaanismen/event-driven-notification-system/internal/logging"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/store"
 )
 
 const maxBatchItems = 1000

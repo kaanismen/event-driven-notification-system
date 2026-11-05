@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	openapi "github.com/kaanismen/insider-assessment/api"
-	"github.com/kaanismen/insider-assessment/internal/notification"
+	openapi "github.com/kaanismen/event-driven-notification-system/api"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 )
 
 func TestSpecIsServed(t *testing.T) {

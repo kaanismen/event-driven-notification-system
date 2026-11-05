@@ -11,7 +11,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
-	"github.com/kaanismen/insider-assessment/migrations"
+	"github.com/kaanismen/event-driven-notification-system/migrations"
 )
 
 // Migrate applies every pending up migration. golang-migrate holds a Postgres advisory

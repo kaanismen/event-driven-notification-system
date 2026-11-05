@@ -10,9 +10,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kaanismen/insider-assessment/internal/notification"
-	"github.com/kaanismen/insider-assessment/internal/provider"
-	"github.com/kaanismen/insider-assessment/internal/provider/mock"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/provider"
+	"github.com/kaanismen/event-driven-notification-system/internal/provider/mock"
 )
 
 // The mock must speak the same contract the real client expects.

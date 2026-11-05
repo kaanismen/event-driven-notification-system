@@ -16,13 +16,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kaanismen/insider-assessment/internal/config"
-	"github.com/kaanismen/insider-assessment/internal/logging"
-	"github.com/kaanismen/insider-assessment/internal/metrics"
-	"github.com/kaanismen/insider-assessment/internal/notification"
-	"github.com/kaanismen/insider-assessment/internal/provider"
-	"github.com/kaanismen/insider-assessment/internal/provider/mock"
-	"github.com/kaanismen/insider-assessment/internal/store"
+	"github.com/kaanismen/event-driven-notification-system/internal/config"
+	"github.com/kaanismen/event-driven-notification-system/internal/logging"
+	"github.com/kaanismen/event-driven-notification-system/internal/metrics"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/provider"
+	"github.com/kaanismen/event-driven-notification-system/internal/provider/mock"
+	"github.com/kaanismen/event-driven-notification-system/internal/store"
 )
 
 // fakeStore is an in-memory queue. Priority order, due times and SQL details are tested

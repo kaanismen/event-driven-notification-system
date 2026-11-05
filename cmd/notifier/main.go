@@ -14,13 +14,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kaanismen/insider-assessment/internal/config"
-	"github.com/kaanismen/insider-assessment/internal/httpapi"
-	"github.com/kaanismen/insider-assessment/internal/logging"
-	"github.com/kaanismen/insider-assessment/internal/metrics"
-	"github.com/kaanismen/insider-assessment/internal/provider"
-	"github.com/kaanismen/insider-assessment/internal/store"
-	"github.com/kaanismen/insider-assessment/internal/worker"
+	"github.com/kaanismen/event-driven-notification-system/internal/config"
+	"github.com/kaanismen/event-driven-notification-system/internal/httpapi"
+	"github.com/kaanismen/event-driven-notification-system/internal/logging"
+	"github.com/kaanismen/event-driven-notification-system/internal/metrics"
+	"github.com/kaanismen/event-driven-notification-system/internal/provider"
+	"github.com/kaanismen/event-driven-notification-system/internal/store"
+	"github.com/kaanismen/event-driven-notification-system/internal/worker"
 )
 
 func main() {

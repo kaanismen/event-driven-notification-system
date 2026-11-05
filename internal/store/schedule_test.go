@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kaanismen/insider-assessment/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 )
 
 func createScheduled(t *testing.T, s *Store, at *time.Time) notification.Notification {

@@ -14,7 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kaanismen/insider-assessment/internal/logging"
+	"github.com/kaanismen/event-driven-notification-system/internal/logging"
 )
 
 func newTestHandler(t *testing.T) (http.Handler, *bytes.Buffer) {
