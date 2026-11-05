@@ -229,13 +229,17 @@ func TestMarkSentAndFailedAreFenced(t *testing.T) {
 	claimed := claimSMS(t, s, 2)
 	a, b := claimed[0], claimed[1]
 
-	if ok, err := s.MarkSent(ctx, a.ID, a.Attempts+1, "x"); err != nil || ok {
+	if ok, _, err := s.MarkSent(ctx, a.ID, a.Attempts+1, "x"); err != nil || ok {
 		t.Errorf("MarkSent with a stale attempt = %t, %v; want no update", ok, err)
 	}
-	if ok, err := s.MarkSent(ctx, a.ID, a.Attempts, "provider-1"); err != nil || !ok {
+	ok, latency, err := s.MarkSent(ctx, a.ID, a.Attempts, "provider-1")
+	if err != nil || !ok {
 		t.Fatalf("MarkSent = %t, %v", ok, err)
 	}
-	if ok, _ := s.MarkSent(ctx, a.ID, a.Attempts, "provider-2"); ok {
+	if latency <= 0 || latency > time.Minute {
+		t.Errorf("end-to-end latency = %v, want the short time since creation", latency)
+	}
+	if ok, _, _ := s.MarkSent(ctx, a.ID, a.Attempts, "provider-2"); ok {
 		t.Error("MarkSent succeeded twice on the same row")
 	}
 	sent, _ := s.Get(ctx, a.ID)
@@ -297,7 +301,7 @@ func TestCancelRacesRealClaim(t *testing.T) {
 		case cancelErr == nil && len(claimed) == 0 && final.Status == notification.StatusCancelled:
 		case errors.As(cancelErr, &nc) && len(claimed) == 1 && final.Status == notification.StatusProcessing:
 			// The claimed row is done with, so the next iteration's claim cannot see it.
-			if _, err := s.MarkSent(ctx, id, claimed[0].Attempts, ""); err != nil {
+			if _, _, err := s.MarkSent(ctx, id, claimed[0].Attempts, ""); err != nil {
 				t.Fatal(err)
 			}
 		default:

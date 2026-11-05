@@ -2,11 +2,13 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/kaanismen/insider-assessment/internal/notification"
 )
@@ -158,18 +160,25 @@ func splitQuota(limit int, weights [3]int) [3]int {
 // MarkSent records a successful delivery. The update only matches while this worker
 // still owns the row (status processing and the attempt it claimed), so a worker whose
 // lease expired cannot overwrite the result of the worker that took the row over
-// (ADR-0005). It reports whether the row was updated.
-func (s *Store) MarkSent(ctx context.Context, id uuid.UUID, attempt int, providerMessageID string) (bool, error) {
-	tag, err := s.pool.Exec(ctx, `
+// (ADR-0005). It reports whether the row was updated and, if so, the end-to-end latency
+// from creation to now. Both ends come from the database clock, so clock differences
+// between the app and the database cannot distort it.
+func (s *Store) MarkSent(ctx context.Context, id uuid.UUID, attempt int, providerMessageID string) (bool, time.Duration, error) {
+	var seconds float64
+	err := s.pool.QueryRow(ctx, `
 		UPDATE notifications
 		SET status = 'sent', sent_at = now(), provider_message_id = NULLIF($3, ''),
 		    locked_until = NULL, last_error = NULL, updated_at = now()
-		WHERE id = $1 AND status = 'processing' AND attempts = $2`,
-		id.String(), attempt, providerMessageID)
-	if err != nil {
-		return false, fmt.Errorf("mark sent: %w", err)
+		WHERE id = $1 AND status = 'processing' AND attempts = $2
+		RETURNING EXTRACT(EPOCH FROM sent_at - created_at)::float8`,
+		id.String(), attempt, providerMessageID).Scan(&seconds)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, 0, nil
 	}
-	return tag.RowsAffected() == 1, nil
+	if err != nil {
+		return false, 0, fmt.Errorf("mark sent: %w", err)
+	}
+	return true, time.Duration(seconds * float64(time.Second)), nil
 }
 
 // MarkFailed records a delivery that will not be retried: a permanent error, or the

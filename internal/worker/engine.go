@@ -21,7 +21,7 @@ import (
 // Store is the part of the store the engine needs; tests pass an in-memory fake.
 type Store interface {
 	Claim(ctx context.Context, p store.ClaimParams) ([]notification.Notification, error)
-	MarkSent(ctx context.Context, id uuid.UUID, attempt int, providerMessageID string) (bool, error)
+	MarkSent(ctx context.Context, id uuid.UUID, attempt int, providerMessageID string) (bool, time.Duration, error)
 	MarkFailed(ctx context.Context, id uuid.UUID, attempt int, reason string) (bool, error)
 	MarkRetry(ctx context.Context, id uuid.UUID, attempt int, delay time.Duration, reason string) (bool, error)
 	Release(ctx context.Context, id uuid.UUID, attempt int) (bool, error)
@@ -218,7 +218,7 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 	if res.MessageID == "" {
 		logger.WarnContext(ctx, "provider accepted the message without a messageId")
 	}
-	owned, err := e.store.MarkSent(writeCtx, n.ID, n.Attempts, res.MessageID)
+	owned, _, err := e.store.MarkSent(writeCtx, n.ID, n.Attempts, res.MessageID)
 	switch {
 	case err != nil:
 		logger.ErrorContext(ctx, "could not record successful delivery", "error", err)

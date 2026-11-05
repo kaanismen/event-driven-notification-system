@@ -68,13 +68,13 @@ func (f *fakeStore) Claim(_ context.Context, p store.ClaimParams) ([]notificatio
 	return batch, nil
 }
 
-func (f *fakeStore) MarkSent(_ context.Context, id uuid.UUID, _ int, msgID string) (bool, error) {
+func (f *fakeStore) MarkSent(_ context.Context, id uuid.UUID, _ int, msgID string) (bool, time.Duration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent[id] = msgID
 	delete(f.claimed, id)
 	f.checkDone()
-	return true, nil
+	return true, time.Millisecond, nil
 }
 
 func (f *fakeStore) MarkFailed(_ context.Context, id uuid.UUID, _ int, reason string) (bool, error) {
