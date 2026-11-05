@@ -7,6 +7,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // requestIDKey is an unexported type, so no other package can read or overwrite the value
@@ -25,7 +27,9 @@ func RequestID(ctx context.Context) string {
 }
 
 // New returns a JSON logger. Lines logged with the *Context methods (InfoContext,
-// ErrorContext, ...) get a request_id field when the context carries one.
+// ErrorContext, ...) get a request_id field when the context carries one, and trace_id
+// and span_id when it carries a recorded trace span (ADR-0021), so a log line leads
+// straight to its trace.
 func New(w io.Writer, level slog.Leveler) *slog.Logger {
 	return slog.New(contextHandler{slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})})
 }
@@ -38,6 +42,9 @@ type contextHandler struct {
 func (h contextHandler) Handle(ctx context.Context, r slog.Record) error {
 	if id := RequestID(ctx); id != "" {
 		r.AddAttrs(slog.String("request_id", id))
+	}
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		r.AddAttrs(slog.String("trace_id", sc.TraceID().String()), slog.String("span_id", sc.SpanID().String()))
 	}
 	return h.Handler.Handle(ctx, r)
 }
