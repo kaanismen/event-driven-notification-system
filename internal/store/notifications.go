@@ -69,20 +69,21 @@ const (
 // notificationColumns is the column list every read uses, in scanNotification order.
 const notificationColumns = `id, batch_id, channel, recipient, content, priority, status,
 	attempts, max_attempts, next_attempt_at, last_error, provider_message_id,
-	correlation_id, created_at, updated_at, sent_at, scheduled_at`
+	correlation_id, created_at, updated_at, sent_at, scheduled_at, template_id`
 
 // insertNotifications inserts any number of rows with one fixed statement: each column
 // arrives as an array and unnest turns the arrays back into rows. This avoids building
 // SQL with up to 1000 VALUES tuples (8000 parameters) for a full batch. A scheduled row
 // starts with next_attempt_at at its scheduled time, so the existing claim simply does not
-// see it before then (ADR-0017); every other row is due at once.
+// see it before then (ADR-0017); every other row is due at once. content is already
+// final: a templated request was rendered before it got here (ADR-0019).
 const insertNotifications = `
 INSERT INTO notifications (id, batch_id, channel, recipient, content, priority, max_attempts, correlation_id,
-                           scheduled_at, next_attempt_at)
+                           scheduled_at, next_attempt_at, template_id)
 SELECT t.id, $2::uuid, t.channel, t.recipient, t.content, t.priority, $7::int, $8::text,
-       t.scheduled_at, coalesce(t.scheduled_at, now())
-FROM unnest($1::uuid[], $3::text[], $4::text[], $5::text[], $6::smallint[], $9::timestamptz[])
-    AS t(id, channel, recipient, content, priority, scheduled_at)
+       t.scheduled_at, coalesce(t.scheduled_at, now()), t.template_id
+FROM unnest($1::uuid[], $3::text[], $4::text[], $5::text[], $6::smallint[], $9::timestamptz[], $10::uuid[])
+    AS t(id, channel, recipient, content, priority, scheduled_at, template_id)
 RETURNING ` + notificationColumns
 
 // Create inserts the notifications and, if a key is given, the idempotency key, in one
@@ -147,6 +148,7 @@ func (s *Store) Create(ctx context.Context, p CreateParams) (CreateResult, error
 	contents := make([]string, len(p.Requests))
 	priorities := make([]int16, len(p.Requests))
 	scheduled := make([]*time.Time, len(p.Requests)) // nil elements become SQL NULL
+	templates := make([]*string, len(p.Requests))
 	for i, r := range p.Requests {
 		idText[i] = ids[i].String()
 		channels[i] = string(r.Channel)
@@ -154,6 +156,10 @@ func (s *Store) Create(ctx context.Context, p CreateParams) (CreateResult, error
 		contents[i] = r.Content
 		priorities[i] = r.Priority.Rank()
 		scheduled[i] = r.ScheduledAt
+		if r.TemplateID != nil {
+			id := r.TemplateID.String()
+			templates[i] = &id
+		}
 	}
 
 	var batchArg any // nil is sent as SQL NULL
@@ -162,7 +168,7 @@ func (s *Store) Create(ctx context.Context, p CreateParams) (CreateResult, error
 	}
 
 	rows, err := tx.Query(ctx, insertNotifications,
-		idText, batchArg, channels, recipients, contents, priorities, p.MaxAttempts, p.CorrelationID, scheduled)
+		idText, batchArg, channels, recipients, contents, priorities, p.MaxAttempts, p.CorrelationID, scheduled, templates)
 	if err != nil {
 		return CreateResult{}, fmt.Errorf("insert notifications: %w", err)
 	}
@@ -283,20 +289,23 @@ func collectNotifications(rows pgx.Rows) ([]notification.Notification, error) {
 func scanNotification(row pgx.Row) (notification.Notification, error) {
 	var (
 		n                                  notification.Notification
-		batchID                            uuid.NullUUID
+		batchID, templateID                uuid.NullUUID
 		channel, status                    string
 		priority                           int16
 		lastError, providerID, correlation *string
 	)
 	err := row.Scan(&n.ID, &batchID, &channel, &n.Recipient, &n.Content, &priority, &status,
 		&n.Attempts, &n.MaxAttempts, &n.NextAttemptAt, &lastError, &providerID,
-		&correlation, &n.CreatedAt, &n.UpdatedAt, &n.SentAt, &n.ScheduledAt)
+		&correlation, &n.CreatedAt, &n.UpdatedAt, &n.SentAt, &n.ScheduledAt, &templateID)
 	if err != nil {
 		return notification.Notification{}, err
 	}
 
 	if batchID.Valid {
 		n.BatchID = &batchID.UUID
+	}
+	if templateID.Valid {
+		n.TemplateID = &templateID.UUID
 	}
 	n.Channel = notification.Channel(channel)
 	n.Status = notification.Status(status)

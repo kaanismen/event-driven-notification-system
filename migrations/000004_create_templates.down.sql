@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE notifications DROP COLUMN IF EXISTS template_id;
+DROP TABLE IF EXISTS templates;
+
+COMMIT;
