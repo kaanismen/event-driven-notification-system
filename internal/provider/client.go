@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,10 +34,12 @@ type Result struct {
 	MessageID string
 }
 
-// StatusError is a response outside 2xx. Phase 4 classifies it as transient or permanent.
+// StatusError is a response outside 2xx. Retryable tells transient from permanent ones.
 type StatusError struct {
 	Code int
 	Body string // first bytes of the response body, for last_error and logs
+	// RetryAfter is the wait the provider asked for in a Retry-After header, or 0 (A-30).
+	RetryAfter time.Duration
 }
 
 func (e *StatusError) Error() string {
@@ -112,15 +115,17 @@ func (c *Client) Send(ctx context.Context, m Message) (Result, error) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
 		// The status line arrived, so for a 2xx the provider has accepted the message.
-		// Treating that as a failure would make Phase 4 retry, which is a duplicate send.
+		// Treating that as a failure would make the worker retry, which is a duplicate send.
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return Result{}, nil
 		}
-		return Result{}, &StatusError{Code: resp.StatusCode}
+		return Result{}, &StatusError{Code: resp.StatusCode, RetryAfter: retryAfter(resp.Header, time.Now())}
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return Result{}, &StatusError{Code: resp.StatusCode, Body: excerpt(body)}
+		return Result{}, &StatusError{
+			Code: resp.StatusCode, Body: excerpt(body), RetryAfter: retryAfter(resp.Header, time.Now()),
+		}
 	}
 
 	var parsed responseBody
@@ -132,6 +137,57 @@ func (c *Client) Send(ctx context.Context, m Message) (Result, error) {
 	return Result{MessageID: parsed.MessageID}, nil //nolint:staticcheck // S1016, see above
 
 }
+
+// Retryable reports whether a failed Send may succeed if tried again later (ADR-0002):
+//
+//   - 408, 429 and 5xx responses: the provider is slow, overloaded or briefly broken.
+//   - Every error without a status code: connection failures and timeouts. A timeout is
+//     ambiguous (the provider may have accepted the message), and we accept the possible
+//     duplicate under at-least-once delivery (ADR-0005).
+//
+// Any other status, such as 400 or 404, says the request itself is wrong, so sending
+// the same request again would fail the same way.
+func Retryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var se *StatusError
+	if !errors.As(err, &se) {
+		return true
+	}
+	return se.Code == http.StatusRequestTimeout || se.Code == http.StatusTooManyRequests ||
+		(se.Code >= 500 && se.Code <= 599)
+}
+
+// RetryAfter returns the wait the provider asked for, or 0 when it did not ask.
+func RetryAfter(err error) time.Duration {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.RetryAfter
+	}
+	return 0
+}
+
+// retryAfter parses a Retry-After header, which is either a number of seconds or an
+// HTTP date. Invalid values and dates in the past mean "no preference".
+func retryAfter(h http.Header, now time.Time) time.Duration {
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
+		// Clamped before converting, so a huge value cannot overflow the Duration.
+		return time.Duration(min(max(secs, 0), maxRetryAfterSeconds)) * time.Second
+	}
+	if at, err := http.ParseTime(v); err == nil && at.After(now) {
+		return at.Sub(now)
+	}
+	return 0
+}
+
+// maxRetryAfterSeconds bounds what we parse; the worker caps the wait at
+// RETRY_MAX_DELAY anyway.
+const maxRetryAfterSeconds = 24 * 60 * 60
 
 // stripURL removes the request URL from net/http errors. A webhook.site URL is a secret
 // token, and errors end up in last_error, which the API returns to clients.
