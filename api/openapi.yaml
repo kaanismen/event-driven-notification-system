@@ -461,7 +461,9 @@ paths:
         every 30 seconds and never expects messages from the client.
 
         For a batch, the snapshot is the same document as `GET /v1/batches/{id}`, and the
-        connection closes with `1000` once every item is final.
+        connection closes with `1000` once every item is final. That snapshot can be large
+        (about 0.4 MB for 1000 short SMS, several MB for long emails), so raise the
+        client's maximum message size: many WebSocket clients default to 32 KiB or 64 KiB.
       parameters:
         - name: id
           in: path
