@@ -43,6 +43,7 @@ type breaker struct {
 	cooldown  time.Duration
 	now       func() time.Time // time.Now in production; tests move a fake clock
 	logger    *slog.Logger
+	onChange  func(breakerState) // optional; the engine reports the state as a metric
 
 	mu       sync.Mutex
 	state    breakerState
@@ -136,13 +137,16 @@ func (b *breaker) open() {
 }
 
 // setState must be called with mu held. Every change is logged, so an outage and the
-// recovery are visible in the logs (a metric follows in Phase 5).
+// recovery are visible in the logs and, through onChange, in the metrics.
 func (b *breaker) setState(to breakerState) {
 	if b.state == to {
 		return
 	}
 	from := b.state
 	b.state = to
+	if b.onChange != nil {
+		b.onChange(to)
+	}
 	b.logger.Warn("circuit breaker state changed", "from", from.String(), "to", to.String(),
 		"threshold", b.threshold, "cooldown", b.cooldown.String())
 }

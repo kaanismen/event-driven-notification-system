@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/kaanismen/insider-assessment/internal/config"
+	"github.com/kaanismen/insider-assessment/internal/metrics"
 	"github.com/kaanismen/insider-assessment/internal/notification"
 	"github.com/kaanismen/insider-assessment/internal/provider"
 	"github.com/kaanismen/insider-assessment/internal/provider/mock"
@@ -71,7 +72,7 @@ func startEngine(t *testing.T, st *store.Store, opts mock.Options, cfg config.Wo
 func startEngineWith(t *testing.T, st *store.Store, h http.Handler, cfg config.Worker, providerTimeout time.Duration) func() {
 	t.Helper()
 	srv := httptest.NewServer(h)
-	e := New(st, provider.NewClient(srv.URL, providerTimeout), slog.New(slog.DiscardHandler), cfg)
+	e := New(st, provider.NewClient(srv.URL, providerTimeout), slog.New(slog.DiscardHandler), metrics.New(), cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})

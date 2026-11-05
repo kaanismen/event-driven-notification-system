@@ -16,6 +16,7 @@ import (
 	"github.com/kaanismen/insider-assessment/internal/config"
 	"github.com/kaanismen/insider-assessment/internal/httpapi"
 	"github.com/kaanismen/insider-assessment/internal/logging"
+	"github.com/kaanismen/insider-assessment/internal/metrics"
 	"github.com/kaanismen/insider-assessment/internal/provider"
 	"github.com/kaanismen/insider-assessment/internal/store"
 	"github.com/kaanismen/insider-assessment/internal/worker"
@@ -53,12 +54,14 @@ func run() error {
 	}
 
 	st := store.New(pool)
+	m := metrics.New()
+	m.WatchQueue(st, logger)
 
 	// The engine stops on a shutdown signal or when run returns for any other reason
 	// (deferred stopEngine), for example because the HTTP server failed to start.
 	engineCtx, stopEngine := context.WithCancel(ctx)
 	defer stopEngine()
-	engine := worker.New(st, provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout), logger, cfg.Worker)
+	engine := worker.New(st, provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout), logger, m, cfg.Worker)
 	engineDone := make(chan struct{})
 	go func() {
 		engine.Run(engineCtx)

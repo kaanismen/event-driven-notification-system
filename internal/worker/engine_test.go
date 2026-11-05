@@ -18,6 +18,7 @@ import (
 
 	"github.com/kaanismen/insider-assessment/internal/config"
 	"github.com/kaanismen/insider-assessment/internal/logging"
+	"github.com/kaanismen/insider-assessment/internal/metrics"
 	"github.com/kaanismen/insider-assessment/internal/notification"
 	"github.com/kaanismen/insider-assessment/internal/provider"
 	"github.com/kaanismen/insider-assessment/internal/provider/mock"
@@ -200,7 +201,7 @@ func TestRateLimitPerChannel(t *testing.T) {
 	srv := httptest.NewServer(m)
 	defer srv.Close()
 
-	e := New(f, provider.NewClient(srv.URL, 5*time.Second), slog.New(slog.DiscardHandler), testConfig())
+	e := New(f, provider.NewClient(srv.URL, 5*time.Second), slog.New(slog.DiscardHandler), metrics.New(), testConfig())
 	elapsed := runUntilDone(t, e, f, 15*time.Second)
 
 	byChannel := map[string][]time.Time{}
@@ -248,7 +249,7 @@ func TestDeliveryRecordsResultsAndCarriesTheRequestID(t *testing.T) {
 
 	var logs safeBuffer
 	f := newFakeStore(rows)
-	e := New(f, provider.NewClient(srv.URL, 5*time.Second), logging.New(&logs, slog.LevelInfo), testConfig())
+	e := New(f, provider.NewClient(srv.URL, 5*time.Second), logging.New(&logs, slog.LevelInfo), metrics.New(), testConfig())
 	runUntilDone(t, e, f, 5*time.Second)
 
 	if len(f.sent) != 2 || len(f.failed) != 2 {
@@ -308,8 +309,27 @@ func TestRetryDecisions(t *testing.T) {
 	defer srv.Close()
 
 	f := newFakeStore(rows)
-	e := New(f, provider.NewClient(srv.URL, time.Second), slog.New(slog.DiscardHandler), testConfig())
+	m := metrics.New()
+	e := New(f, provider.NewClient(srv.URL, time.Second), slog.New(slog.DiscardHandler), m, testConfig())
 	runUntilDone(t, e, f, 5*time.Second)
+
+	// OBS-02: the counters match what happened. recovers: 2 retries then sent; permanent:
+	// failed at once; exhausted: 1 retry then failed (max attempts 2).
+	scraped := scrape(t, m)
+	for series, want := range map[string]string{
+		`notifier_deliveries_total{channel="push",outcome="sent"}`:                                  "1",
+		`notifier_deliveries_total{channel="push",outcome="retry"}`:                                 "3",
+		`notifier_deliveries_total{channel="push",outcome="failed"}`:                                "2",
+		`notifier_provider_request_duration_seconds_count{channel="push",result="success"}`:         "1",
+		`notifier_provider_request_duration_seconds_count{channel="push",result="transient_error"}`: "4",
+		`notifier_provider_request_duration_seconds_count{channel="push",result="permanent_error"}`: "1",
+		`notifier_delivery_latency_seconds_count{channel="push"}`:                                   "1",
+		`notifier_circuit_breaker_state{channel="push"}`:                                            "0",
+	} {
+		if got := scraped[series]; got != want {
+			t.Errorf("%s = %q, want %s", series, got, want)
+		}
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -339,7 +359,7 @@ func TestShutdownFinishesInFlightSends(t *testing.T) {
 
 	rows := rowsFor(notification.ChannelEmail, 1)
 	f := newFakeStore(rows)
-	e := New(f, provider.NewClient(srv.URL, 5*time.Second), slog.New(slog.DiscardHandler), testConfig())
+	e := New(f, provider.NewClient(srv.URL, 5*time.Second), slog.New(slog.DiscardHandler), metrics.New(), testConfig())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
@@ -365,7 +385,7 @@ func TestShutdownFinishesInFlightSends(t *testing.T) {
 
 func TestIdleEngineStopsPromptly(t *testing.T) {
 	f := newFakeStore(nil)
-	e := New(f, provider.NewClient("http://127.0.0.1:1", time.Second), slog.New(slog.DiscardHandler), testConfig())
+	e := New(f, provider.NewClient("http://127.0.0.1:1", time.Second), slog.New(slog.DiscardHandler), metrics.New(), testConfig())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
@@ -398,4 +418,24 @@ func (b *safeBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// scrape reads the metrics endpoint and returns each series line as name{labels} -> value.
+func scrape(t *testing.T, m *metrics.Metrics) map[string]string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	m.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/metrics returned %d", rec.Code)
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(rec.Body.String(), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if i := strings.LastIndexByte(line, ' '); i > 0 {
+			out[line[:i]] = line[i+1:]
+		}
+	}
+	return out
 }

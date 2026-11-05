@@ -13,6 +13,7 @@ import (
 
 	"github.com/kaanismen/insider-assessment/internal/config"
 	"github.com/kaanismen/insider-assessment/internal/logging"
+	"github.com/kaanismen/insider-assessment/internal/metrics"
 	"github.com/kaanismen/insider-assessment/internal/notification"
 	"github.com/kaanismen/insider-assessment/internal/provider"
 	"github.com/kaanismen/insider-assessment/internal/store"
@@ -43,14 +44,15 @@ type Engine struct {
 	store   Store
 	sender  Sender
 	logger  *slog.Logger
+	metrics *metrics.Metrics
 	cfg     config.Worker
 	backoff backoff
 }
 
 // New returns an engine; call Run to start it.
-func New(st Store, sender Sender, logger *slog.Logger, cfg config.Worker) *Engine {
+func New(st Store, sender Sender, logger *slog.Logger, m *metrics.Metrics, cfg config.Worker) *Engine {
 	return &Engine{
-		store: st, sender: sender, logger: logger.With("component", "worker"), cfg: cfg,
+		store: st, sender: sender, logger: logger.With("component", "worker"), metrics: m, cfg: cfg,
 		backoff: newBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay),
 	}
 }
@@ -81,6 +83,8 @@ func (e *Engine) runChannel(ctx context.Context, ch notification.Channel) {
 	// The token bucket paces; the window cap makes the per-second ceiling exact (see ratelimit.go).
 	limit := limits{pace: limiter, ceiling: newWindowCap(e.cfg.RatePerSecond, time.Second+windowMargin)}
 	brk := newBreaker(e.cfg.BreakerThreshold, e.cfg.BreakerCooldown, logger)
+	brk.onChange = func(s breakerState) { e.metrics.BreakerState(ch, int(s)) }
+	e.metrics.BreakerState(ch, int(breakerClosed))
 	jobs := make(chan job)
 
 	var senders sync.WaitGroup
@@ -116,6 +120,9 @@ func (e *Engine) dispatch(ctx context.Context, logger *slog.Logger, ch notificat
 			}
 		} else if n > 0 {
 			logger.Warn("dead-lettered rows whose worker stopped during their final attempt", "count", n)
+			for range n {
+				e.metrics.Delivery(ch, metrics.OutcomeFailed)
+			}
 		}
 
 		// While the breaker is open nothing is claimed, so waiting messages keep their
@@ -158,7 +165,7 @@ func (e *Engine) dispatch(ctx context.Context, logger *slog.Logger, ch notificat
 				// instead of leaving them until their lease expires (ADR-0014).
 				logger.Info("releasing claimed rows not yet sent", "count", len(batch)-i)
 				for _, rest := range batch[i:] {
-					e.release(ctx, logger, rest)
+					e.release(ctx, logger, rest, metrics.ReleaseShutdown)
 				}
 				return
 			}
@@ -184,14 +191,14 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 		if j.probe {
 			brk.abortProbe()
 		}
-		e.release(ctx, logger, n)
+		e.release(ctx, logger, n, metrics.ReleaseShutdown)
 		return
 	}
 	if !j.probe && !brk.closed() {
 		// The breaker opened while this row waited for its rate slot. Hand it back with
 		// its attempt rather than send it into the outage.
 		logger.DebugContext(ctx, "circuit breaker open: row handed back unsent")
-		e.release(ctx, logger, n)
+		e.release(ctx, logger, n, metrics.ReleaseBreaker)
 		return
 	}
 
@@ -205,7 +212,9 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 		ID: n.ID, Channel: n.Channel, Recipient: n.Recipient, Content: n.Content, CorrelationID: n.CorrelationID,
 	})
 	elapsed := time.Since(start)
-	brk.record(j.probe, sendErr != nil && provider.Retryable(sendErr))
+	transient := sendErr != nil && provider.Retryable(sendErr)
+	brk.record(j.probe, transient)
+	e.metrics.ProviderCall(n.Channel, callResult(sendErr, transient), elapsed)
 
 	writeCtx, cancel := context.WithTimeout(keep, resultWriteTimeout)
 	defer cancel()
@@ -218,13 +227,15 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 	if res.MessageID == "" {
 		logger.WarnContext(ctx, "provider accepted the message without a messageId")
 	}
-	owned, _, err := e.store.MarkSent(writeCtx, n.ID, n.Attempts, res.MessageID)
+	owned, latency, err := e.store.MarkSent(writeCtx, n.ID, n.Attempts, res.MessageID)
 	switch {
 	case err != nil:
 		logger.ErrorContext(ctx, "could not record successful delivery", "error", err)
 	case !owned:
 		logger.WarnContext(ctx, "delivery not recorded: row no longer owned by this worker")
 	default:
+		e.metrics.Delivery(n.Channel, metrics.OutcomeSent)
+		e.metrics.Delivered(n.Channel, latency)
 		logger.InfoContext(ctx, "notification sent",
 			"provider_message_id", res.MessageID, "duration_ms", elapsed.Milliseconds())
 	}
@@ -248,6 +259,7 @@ func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, n notif
 		case !owned:
 			logger.WarnContext(ctx, "retry not recorded: row no longer owned by this worker", attrs...)
 		default:
+			e.metrics.Delivery(n.Channel, metrics.OutcomeRetry)
 			logger.WarnContext(ctx, "delivery failed, will retry",
 				append(attrs, "retry_in_ms", delay.Milliseconds(), "max_attempts", n.MaxAttempts)...)
 		}
@@ -265,18 +277,35 @@ func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, n notif
 	case !owned:
 		logger.WarnContext(ctx, "failed delivery not recorded: row no longer owned by this worker", attrs...)
 	default:
+		e.metrics.Delivery(n.Channel, metrics.OutcomeFailed)
 		logger.ErrorContext(ctx, "delivery failed for good", append(attrs, "reason", why)...)
 	}
 }
 
-// release hands an unsent row back to the queue during shutdown. ctx is already
-// cancelled at this point, so the update gets its own short deadline.
-func (e *Engine) release(ctx context.Context, logger *slog.Logger, n notification.Notification) {
+// release hands an unsent row back to the queue, at shutdown or when the breaker is
+// open. At shutdown ctx is already cancelled, so the update gets its own short deadline.
+func (e *Engine) release(ctx context.Context, logger *slog.Logger, n notification.Notification, reason string) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resultWriteTimeout)
 	defer cancel()
-	if _, err := e.store.Release(releaseCtx, n.ID, n.Attempts); err != nil {
+	owned, err := e.store.Release(releaseCtx, n.ID, n.Attempts)
+	switch {
+	case err != nil:
 		// Not fatal: the row stays processing and is reclaimed when its lease expires.
 		logger.ErrorContext(ctx, "could not release unsent row", "notification_id", n.ID.String(), "error", err)
+	case owned:
+		e.metrics.Released(n.Channel, reason)
+	}
+}
+
+// callResult names the result of a provider call for the duration histogram.
+func callResult(sendErr error, transient bool) string {
+	switch {
+	case sendErr == nil:
+		return metrics.ResultSuccess
+	case transient:
+		return metrics.ResultTransient
+	default:
+		return metrics.ResultPermanent
 	}
 }
 
