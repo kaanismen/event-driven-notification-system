@@ -88,7 +88,7 @@ will write. Status is updated at the end of each phase.
 
 | ID | Bonus (paraphrased) | Plan | Phase | Test |
 |----|---------------------|------|-------|------|
-| BON-01 | Failure handling | Dead-letter state is part of the core design (DR-04), done in Phase 4. Circuit breaker per channel approved as Phase 4b (ADR-0014). | 4, 4b | F |
+| BON-01 | Failure handling | Dead-letter state is part of the core design (DR-04), done in Phase 4. Circuit breaker per channel done in Phase 4b (ADR-0015): an outage test shows it saving attempts. | 4, 4b | U, F |
 | BON-02 | Scheduled notifications (send at a future time) | Only if ahead of schedule. Schema already supports it through `next_attempt_at`. | 4+ | I |
 | BON-03 | Message templates with variables | Out of scope unless requested | - | - |
 | BON-04 | Real-time status via WebSocket | Out of scope unless requested | - | - |

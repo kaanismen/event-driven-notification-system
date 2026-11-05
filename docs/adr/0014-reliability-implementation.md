@@ -51,6 +51,7 @@ fallback.
 - C. Build it as a separate small phase (4b) after Phase 4 is approved.
 
 **Decision: C** (chosen by the maintainer). Phase 4 stays small enough to review in one sitting.
+Built in Phase 4b, see ADR-0015.
 Until 4b, a provider outage longer than the retry window (about 4 minutes in the worst case with
 the defaults) dead-letters the messages that run out of attempts during it.
 

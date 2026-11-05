@@ -69,7 +69,8 @@ stateDiagram-v2
 ## Worker flow (deliver)
 
 1. For each channel, one dispatcher goroutine first dead-letters rows whose lease expired on their
-   final attempt, then claims a small batch (ADR-0013): first rows whose lease expired and that have
+   final attempt. If the channel's circuit breaker is open (ADR-0015) it claims nothing until the
+   cool-down is over, then a single probe row. Otherwise it claims a small batch (ADR-0013): first rows whose lease expired and that have
    attempts left, then due `pending` rows per priority level up to its weighted share, then any due
    rows for unused share (ADR-0008). Each claim is one `FOR UPDATE SKIP LOCKED` statement that sets
    `status = processing`, `locked_until = now() + lease` and `attempts = attempts + 1`. Rows go to a
