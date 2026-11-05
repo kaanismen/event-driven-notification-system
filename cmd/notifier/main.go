@@ -51,7 +51,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,
-		Handler: httpapi.NewHandler(logger),
+		Handler: httpapi.NewHandler(logger, store.New(pool), cfg.MaxAttempts),
 		// Explicit timeouts: the zero values mean "wait forever", which lets slow or idle
 		// clients hold connections open indefinitely.
 		ReadHeaderTimeout: 5 * time.Second,

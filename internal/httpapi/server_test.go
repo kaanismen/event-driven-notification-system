@@ -17,7 +17,7 @@ import (
 func newTestHandler(t *testing.T) (http.Handler, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
-	return NewHandler(logging.New(&logs, slog.LevelDebug)), &logs
+	return NewHandler(logging.New(&logs, slog.LevelDebug), &fakeStore{}, 8), &logs
 }
 
 func TestHealth(t *testing.T) {
