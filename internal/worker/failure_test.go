@@ -7,8 +7,10 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,7 +64,13 @@ func enqueue(t *testing.T, st *store.Store, n, maxAttempts int) []uuid.UUID {
 func startEngine(t *testing.T, st *store.Store, opts mock.Options, cfg config.Worker, providerTimeout time.Duration) (*mock.Server, func()) {
 	t.Helper()
 	m := mock.NewRecorder(opts)
-	srv := httptest.NewServer(m)
+	return m, startEngineWith(t, st, m, cfg, providerTimeout)
+}
+
+// startEngineWith is startEngine with any provider handler.
+func startEngineWith(t *testing.T, st *store.Store, h http.Handler, cfg config.Worker, providerTimeout time.Duration) func() {
+	t.Helper()
+	srv := httptest.NewServer(h)
 	e := New(st, provider.NewClient(srv.URL, providerTimeout), slog.New(slog.DiscardHandler), cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -86,7 +94,7 @@ func startEngine(t *testing.T, st *store.Store, opts mock.Options, cfg config.Wo
 		srv.Close()
 	}
 	t.Cleanup(stop)
-	return m, stop
+	return stop
 }
 
 // waitFinal polls until every notification is sent or failed and returns them.
@@ -334,5 +342,59 @@ func TestShutdownReleasesUnsentRows(t *testing.T) {
 	}
 	if counts[notification.StatusSent] < 1 || counts[notification.StatusSent]+counts[notification.StatusPending] != len(ids) {
 		t.Errorf("status counts %v; want at least one sent and the rest pending", counts)
+	}
+}
+
+// TestBreakerSavesAttemptsDuringAnOutage: the provider is down for 1.2 s, then recovers.
+// Without a breaker every waiting message would burn through its attempts (see
+// TestProviderDownDeadLetters). With it, the channel stops after a few failures, sends one
+// probe per cool-down, and resumes once a probe succeeds: no message is dead-lettered and
+// the provider sees only a handful of calls during the outage (ADR-0015).
+func TestBreakerSavesAttemptsDuringAnOutage(t *testing.T) {
+	st := newRealStore(t)
+	ids := enqueue(t, st, 40, 8)
+	cfg := fastRetries()
+	cfg.BreakerThreshold, cfg.BreakerCooldown = 5, 200*time.Millisecond
+
+	var down atomic.Bool
+	var callsWhileDown atomic.Int64
+	down.Store(true)
+	m := mock.NewRecorder(mock.Options{})
+	outage := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			callsWhileDown.Add(1)
+			http.Error(w, "maintenance", http.StatusServiceUnavailable)
+			return
+		}
+		m.ServeHTTP(w, r)
+	})
+	startEngineWith(t, st, outage, cfg, time.Second)
+
+	time.Sleep(1200 * time.Millisecond)
+	down.Store(false)
+	outageCalls := callsWhileDown.Load()
+
+	final := waitFinal(t, st, ids, 10*time.Second)
+	maxAttempts := 0
+	for _, id := range ids {
+		n := final[id]
+		if n.Status != notification.StatusSent {
+			t.Errorf("%s: status %s after %d attempts, want sent", id, n.Status, n.Attempts)
+		}
+		maxAttempts = max(maxAttempts, n.Attempts)
+	}
+	t.Logf("1.2 s outage: %d provider calls, at most %d attempts used by any message", outageCalls, maxAttempts)
+
+	// 5 to open, then one probe per 200 ms cool-down (about 6), plus a few sends that
+	// were already under way when the breaker opened. Without the breaker the rate limit
+	// alone would allow about 120 calls in 1.2 s.
+	if outageCalls > 25 {
+		t.Errorf("%d provider calls during the outage; the breaker did not stop the channel", outageCalls)
+	}
+	if maxAttempts > 3 {
+		t.Errorf("a message used %d attempts; the outage should cost at most a couple", maxAttempts)
+	}
+	if got := len(m.Requests()); got != len(ids) {
+		t.Errorf("provider accepted %d messages after recovery, want %d (each exactly once)", got, len(ids))
 	}
 }
