@@ -14,8 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.opentelemetry.io/otel/trace/noop"
-
 	"github.com/kaanismen/event-driven-notification-system/internal/config"
 	"github.com/kaanismen/event-driven-notification-system/internal/events"
 	"github.com/kaanismen/event-driven-notification-system/internal/httpapi"
@@ -23,6 +21,7 @@ import (
 	"github.com/kaanismen/event-driven-notification-system/internal/metrics"
 	"github.com/kaanismen/event-driven-notification-system/internal/provider"
 	"github.com/kaanismen/event-driven-notification-system/internal/store"
+	"github.com/kaanismen/event-driven-notification-system/internal/tracing"
 	"github.com/kaanismen/event-driven-notification-system/internal/worker"
 )
 
@@ -61,11 +60,29 @@ func run() error {
 	m := metrics.New()
 	m.WatchQueue(st, logger)
 
+	// Tracing (ADR-0021) is configured by the standard OTEL_* variables and is off when no
+	// endpoint is set. The tracer is passed to the API and the engine, not set globally.
+	tp, stopTracing, err := tracing.Setup(ctx, os.Getenv, logger)
+	if err != nil {
+		return err
+	}
+	// Deferred before the engine and the HTTP server start, so it runs after they have
+	// stopped: the spans of in-flight work are flushed before the process exits. ctx is
+	// cancelled by then, so the flush gets its own deadline.
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := stopTracing(flushCtx); err != nil {
+			logger.Warn("tracing: could not flush the last spans", "error", err)
+		}
+	}()
+	tracer := tp.Tracer("github.com/kaanismen/event-driven-notification-system")
+
 	// The engine stops on a shutdown signal or when run returns for any other reason
 	// (deferred stopEngine), for example because the HTTP server failed to start.
 	engineCtx, stopEngine := context.WithCancel(ctx)
 	defer stopEngine()
-	engine := worker.New(st, provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout), logger, m, cfg.Worker, noop.NewTracerProvider().Tracer(""))
+	engine := worker.New(st, provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout), logger, m, cfg.Worker, tracer)
 	engineDone := make(chan struct{})
 	go func() {
 		engine.Run(engineCtx)
@@ -103,7 +120,7 @@ func run() error {
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.NewHandler(httpapi.Deps{
 			Logger: logger, Store: st, MaxAttempts: cfg.MaxAttempts, MaxScheduleAhead: cfg.MaxScheduleAhead,
-			Ready: ready, Metrics: m.Handler(), Events: hub,
+			Ready: ready, Metrics: m.Handler(), Events: hub, Tracer: tracer,
 		}),
 		// Explicit timeouts: the zero values mean "wait forever", which lets slow or idle
 		// clients hold connections open indefinitely.

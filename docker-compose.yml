@@ -28,12 +28,19 @@ services:
       RETRY_MAX_DELAY: ${RETRY_MAX_DELAY:-5m}
       BREAKER_FAILURE_THRESHOLD: ${BREAKER_FAILURE_THRESHOLD:-10}
       BREAKER_COOLDOWN: ${BREAKER_COOLDOWN:-30s}
+      # Tracing (ADR-0021), with the standard OpenTelemetry variables. Spans go to the
+      # bundled Jaeger; set OTEL_EXPORTER_OTLP_ENDPOINT to an empty value to turn it off.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT-http://jaeger:4318}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-notifier}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
     ports:
       - "${APP_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
       mockprovider:
+        condition: service_started
+      jaeger:
         condition: service_started
     restart: unless-stopped
     # Longer than SHUTDOWN_DRAIN_DELAY plus SHUTDOWN_TIMEOUT, so Docker does not kill
@@ -75,6 +82,14 @@ services:
       MOCK_FAILURE_STATUS: ${MOCK_FAILURE_STATUS:-503}
       MOCK_RETRY_AFTER: ${MOCK_RETRY_AFTER:-0s}
       MOCK_LATENCY: ${MOCK_LATENCY:-0s}
+    restart: unless-stopped
+
+  # Trace viewer (ADR-0021): receives spans from the app over OTLP and shows them at
+  # http://localhost:16686. Traces live in memory and are gone after a restart.
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
     restart: unless-stopped
 
   # Throwaway server for integration tests (ADR-0010). Started only by `make test`
