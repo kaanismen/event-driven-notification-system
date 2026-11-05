@@ -101,21 +101,23 @@ func (s Status) Valid() bool {
 
 // Notification is one message to one recipient on one channel.
 type Notification struct {
-	ID                uuid.UUID
-	BatchID           *uuid.UUID // nil for notifications created one at a time
-	Channel           Channel
-	Recipient         string
-	Content           string
-	Priority          Priority
-	Status            Status
-	Attempts          int
-	MaxAttempts       int
-	NextAttemptAt     time.Time
-	ScheduledAt       *time.Time // nil unless the client asked for a send time (ADR-0017)
-	TemplateID        *uuid.UUID // the template Content was rendered from (ADR-0019), if any
-	LastError         string     // empty when no attempt has failed
-	ProviderMessageID string     // empty until the provider accepts the message
-	CorrelationID     string     // request ID of the API call that created it
+	ID            uuid.UUID
+	BatchID       *uuid.UUID // nil for notifications created one at a time
+	Channel       Channel
+	Recipient     string
+	Content       string
+	Priority      Priority
+	Status        Status
+	Attempts      int
+	MaxAttempts   int
+	NextAttemptAt time.Time
+	ScheduledAt   *time.Time // nil unless the client asked for a send time (ADR-0017)
+	TemplateID    *uuid.UUID // the template Content was rendered from (ADR-0019), if any
+	// Version counts the updates of the row; a higher version is a later state (ADR-0020).
+	Version           int64
+	LastError         string // empty when no attempt has failed
+	ProviderMessageID string // empty until the provider accepts the message
+	CorrelationID     string // request ID of the API call that created it
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	SentAt            *time.Time

@@ -69,7 +69,7 @@ const (
 // notificationColumns is the column list every read uses, in scanNotification order.
 const notificationColumns = `id, batch_id, channel, recipient, content, priority, status,
 	attempts, max_attempts, next_attempt_at, last_error, provider_message_id,
-	correlation_id, created_at, updated_at, sent_at, scheduled_at, template_id`
+	correlation_id, created_at, updated_at, sent_at, scheduled_at, template_id, version`
 
 // insertNotifications inserts any number of rows with one fixed statement: each column
 // arrives as an array and unnest turns the arrays back into rows. This avoids building
@@ -296,7 +296,7 @@ func scanNotification(row pgx.Row) (notification.Notification, error) {
 	)
 	err := row.Scan(&n.ID, &batchID, &channel, &n.Recipient, &n.Content, &priority, &status,
 		&n.Attempts, &n.MaxAttempts, &n.NextAttemptAt, &lastError, &providerID,
-		&correlation, &n.CreatedAt, &n.UpdatedAt, &n.SentAt, &n.ScheduledAt, &templateID)
+		&correlation, &n.CreatedAt, &n.UpdatedAt, &n.SentAt, &n.ScheduledAt, &templateID, &n.Version)
 	if err != nil {
 		return notification.Notification{}, err
 	}
