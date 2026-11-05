@@ -41,6 +41,7 @@ const (
 WITH picked AS (
     SELECT id FROM notifications
     WHERE channel = $1 AND status = 'processing' AND locked_until < now()
+      AND attempts < max_attempts
     ORDER BY locked_until
     LIMIT $3
     FOR UPDATE SKIP LOCKED
@@ -68,8 +69,9 @@ WITH picked AS (
 // Claim takes up to p.Limit due rows of one channel for delivery, in up to five small
 // statements, each atomic on its own:
 //
-//  1. Rows whose lease expired (their worker died). They have waited longest, so they go
-//     first, whatever their priority.
+//  1. Rows whose lease expired (their worker died) and that have attempts left. They have
+//     waited longest, so they go first, whatever their priority. Rows whose lease expired
+//     on their final attempt are left to FailExhaustedLeases.
 //  2. Due pending rows per priority level, up to that level's weighted share (ADR-0008).
 //  3. If a level had fewer rows than its share, one more query fills the unused slots in
 //     priority order, so no capacity is wasted while any work is waiting.
@@ -170,8 +172,9 @@ func (s *Store) MarkSent(ctx context.Context, id uuid.UUID, attempt int, provide
 	return tag.RowsAffected() == 1, nil
 }
 
-// MarkFailed records a delivery that will not be retried, with the same ownership guard
-// as MarkSent. Phase 4 adds retries; until then every failure is final.
+// MarkFailed records a delivery that will not be retried: a permanent error, or the
+// last attempt failed. This is the dead-letter state (ADR-0002). Same ownership guard as
+// MarkSent.
 func (s *Store) MarkFailed(ctx context.Context, id uuid.UUID, attempt int, reason string) (bool, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE notifications
@@ -182,4 +185,63 @@ func (s *Store) MarkFailed(ctx context.Context, id uuid.UUID, attempt int, reaso
 		return false, fmt.Errorf("mark failed: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// MarkRetry puts a failed row back in the queue: it becomes pending again and is due
+// after delay, measured on the database clock like the lease. attempts keeps the
+// attempt just made, so the retry budget shrinks. Same ownership guard as MarkSent.
+func (s *Store) MarkRetry(ctx context.Context, id uuid.UUID, attempt int, delay time.Duration, reason string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE notifications
+		SET status = 'pending', next_attempt_at = now() + $3::bigint * interval '1 millisecond',
+		    last_error = $4, locked_until = NULL, updated_at = now()
+		WHERE id = $1 AND status = 'processing' AND attempts = $2`,
+		id.String(), attempt, delay.Milliseconds(), reason)
+	if err != nil {
+		return false, fmt.Errorf("mark retry: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// Release hands back a claimed row that was never sent, for example because the
+// process is shutting down. The row is due again at once with its old due time, so it
+// keeps its place in the queue, and the attempt is given back: a restart must not use
+// up a message's retry budget (ADR-0014). A crash cannot call Release, so a message
+// that kills its worker still runs out of attempts. Same ownership guard as MarkSent.
+func (s *Store) Release(ctx context.Context, id uuid.UUID, attempt int) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE notifications
+		SET status = 'pending', attempts = attempts - 1, locked_until = NULL, updated_at = now()
+		WHERE id = $1 AND status = 'processing' AND attempts = $2`,
+		id.String(), attempt)
+	if err != nil {
+		return false, fmt.Errorf("release: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// exhaustedLeaseError is the last_error of a row whose worker vanished during its final
+// attempt. We cannot know whether the provider got the message.
+const exhaustedLeaseError = "lease expired during the final attempt; the worker stopped without recording a result"
+
+// FailExhaustedLeases moves rows whose lease expired on their final attempt to failed.
+// Claiming them again would exceed max_attempts; leaving them would keep them in
+// processing forever. This is also what stops a message that crashes every worker that
+// picks it up (ADR-0005). It returns how many rows it moved.
+func (s *Store) FailExhaustedLeases(ctx context.Context, channel notification.Channel) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		WITH picked AS (
+		    SELECT id FROM notifications
+		    WHERE channel = $1 AND status = 'processing' AND locked_until < now()
+		      AND attempts >= max_attempts
+		    FOR UPDATE SKIP LOCKED
+		)
+		UPDATE notifications
+		SET status = 'failed', last_error = $2, locked_until = NULL, updated_at = now()
+		WHERE id IN (SELECT id FROM picked)`,
+		string(channel), exhaustedLeaseError)
+	if err != nil {
+		return 0, fmt.Errorf("fail exhausted leases: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
