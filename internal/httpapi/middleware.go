@@ -48,15 +48,24 @@ func validRequestID(id string) bool {
 	return true
 }
 
-// accessLog writes one line per request after it completes.
+// accessLog writes one line per request after it completes. The route is the matched
+// pattern, such as "GET /v1/notifications/{id}", which the mux sets on the request; it
+// groups requests by endpoint, unlike the path, which contains IDs. Probes and metric
+// scrapes arrive every few seconds, so they are logged at DEBUG to keep INFO readable.
 func accessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			rec := &statusRecorder{ResponseWriter: w}
 			next.ServeHTTP(rec, r)
-			logger.InfoContext(r.Context(), "http request",
+
+			level := slog.LevelInfo
+			if quietRoute(r.Pattern) && rec.status() < 400 {
+				level = slog.LevelDebug
+			}
+			logger.Log(r.Context(), level, "http request",
 				"method", r.Method,
+				"route", r.Pattern, // empty when no route matched (404, 405)
 				"path", r.URL.Path,
 				"status", rec.status(),
 				"bytes", rec.bytes,
@@ -64,6 +73,14 @@ func accessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 			)
 		})
 	}
+}
+
+func quietRoute(pattern string) bool {
+	switch pattern {
+	case "GET /livez", "GET /health", "GET /readyz", "GET /metrics":
+		return true
+	}
+	return false
 }
 
 // recoverPanic turns a panic in a handler into a logged 500 instead of a dropped
