@@ -104,6 +104,20 @@ if [ "$(field status)$(field currentStatus)" != "$first_cancel" ]; then
 fi
 check POST "/v1/notifications/00000000-0000-0000-0000-000000000000/cancel" 404
 
+echo "== scheduled"
+# GNU date (Linux, Git Bash) first, then BSD date (macOS).
+later="$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+1H +%Y-%m-%dT%H:%M:%SZ)"
+check POST /v1/notifications 202 "{\"channel\":\"push\",\"recipient\":\"device-token-abc\",\"content\":\"Reminder\",\"scheduledAt\":\"$later\"}"
+scheduled="$(field id)"
+if [ "$(field scheduledAt)" != "$later" ] || [ "$(field status)" != pending ]; then
+	echo "FAIL scheduled notification: status $(field status), scheduledAt $(field scheduledAt), want pending and $later" >&2
+	exit 1
+fi
+check GET "/v1/notifications?scheduled=true&status=pending&limit=1" 200
+check POST /v1/notifications 422 '{"channel":"push","recipient":"device-token-abc","content":"x","scheduledAt":"2020-01-01T00:00:00Z"}'
+# An hour away it cannot have been sent yet, so the cancel must succeed.
+check POST "/v1/notifications/$scheduled/cancel" 200
+
 echo "== list"
 check GET "/v1/notifications?limit=2" 200
 cursor="$(field nextCursor)"
