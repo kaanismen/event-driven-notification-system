@@ -52,6 +52,12 @@ email='{"channel":"email","recipient":"user@example.com","content":"Hello from t
 push='{"channel":"push","recipient":"device-token-abc","content":"Flash sale starts now","priority":"low"}'
 
 echo "== health"
+# The app container has no healthcheck (the distroless image has no curl), so
+# `docker compose up --wait` can return before the server listens. Wait for it here.
+for _ in $(seq 1 30); do
+	curl -fsS -o /dev/null "$BASE_URL/health" 2>/dev/null && break
+	sleep 1
+done
 check GET /health 200
 require_header "X-Request-Id: $RUN_ID"
 
