@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -15,76 +16,159 @@ import (
 type Config struct {
 	HTTPAddr        string
 	DatabaseURL     string
+	DBMaxConns      int
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
 	// MaxAttempts is the delivery budget copied into each new notification (ADR-0002).
 	MaxAttempts int
+
+	// ProviderURL is where notifications are POSTed (webhook.site or the mock provider).
+	// It is never logged in full: a webhook.site URL works like a password.
+	ProviderURL     string
+	ProviderTimeout time.Duration
+
+	Worker Worker
 }
 
-const (
-	defaultHTTPAddr        = ":8080"
-	defaultLogLevel        = "info"
-	defaultShutdownTimeout = 15 * time.Second
-	defaultMaxAttempts     = 8
-	// maxMaxAttempts keeps a typo such as 1000 from turning a dead provider into hours
-	// of retries per message.
-	maxMaxAttempts = 20
-)
+// Worker holds the delivery engine settings (ADR-0003, ADR-0005, ADR-0008, ADR-0013).
+type Worker struct {
+	RatePerSecond     int           // per channel
+	SendersPerChannel int           // concurrent provider calls per channel
+	ClaimBatchSize    int           // rows claimed per database round trip
+	PollInterval      time.Duration // wait between claims when the queue is empty
+	Lease             time.Duration // how long a claimed row belongs to one worker
+	// PriorityWeights are the shares for high, normal and low when a channel has a
+	// backlog. Every weight must be at least 1, so no level can starve.
+	PriorityWeights [3]int
+}
 
 // Load reads the configuration through getenv (os.Getenv in production, a map lookup in
 // tests). It reports every invalid setting at once, so a misconfigured deployment fails
 // with one complete message instead of one error per restart.
 func Load(getenv func(string) string) (Config, error) {
+	p := parser{getenv: getenv}
+
 	cfg := Config{
-		HTTPAddr:        stringOr(getenv("HTTP_ADDR"), defaultHTTPAddr),
-		DatabaseURL:     strings.TrimSpace(getenv("DATABASE_URL")),
-		ShutdownTimeout: defaultShutdownTimeout,
-		MaxAttempts:     defaultMaxAttempts,
+		HTTPAddr:        p.str("HTTP_ADDR", ":8080"),
+		DatabaseURL:     p.str("DATABASE_URL", ""),
+		DBMaxConns:      p.integer("DB_MAX_CONNS", 20, 2, 500),
+		ShutdownTimeout: p.duration("SHUTDOWN_TIMEOUT", 15*time.Second),
+		// The upper bound keeps a typo such as 1000 from turning a dead provider into
+		// hours of retries per message.
+		MaxAttempts:     p.integer("MAX_ATTEMPTS", 8, 1, 20),
+		ProviderURL:     p.str("PROVIDER_URL", ""),
+		ProviderTimeout: p.duration("PROVIDER_TIMEOUT", 10*time.Second),
+		Worker: Worker{
+			RatePerSecond:     p.integer("RATE_LIMIT_PER_SECOND", 100, 1, 10_000),
+			SendersPerChannel: p.integer("SENDERS_PER_CHANNEL", 50, 1, 1000),
+			// At least 3, so each priority level gets one slot per claim (ADR-0008).
+			ClaimBatchSize:  p.integer("CLAIM_BATCH_SIZE", 20, 3, 1000),
+			PollInterval:    p.duration("POLL_INTERVAL", 250*time.Millisecond),
+			Lease:           p.duration("LEASE_DURATION", 30*time.Second),
+			PriorityWeights: p.weights("PRIORITY_WEIGHTS", [3]int{70, 20, 10}),
+		},
 	}
 
-	var errs []error
-
+	if err := cfg.LogLevel.UnmarshalText([]byte(p.str("LOG_LEVEL", "info"))); err != nil {
+		p.fail("LOG_LEVEL: %w", err)
+	}
 	if cfg.DatabaseURL == "" {
-		errs = append(errs, errors.New("DATABASE_URL is required"))
+		p.fail("DATABASE_URL is required")
+	}
+	if cfg.ProviderURL == "" {
+		p.fail("PROVIDER_URL is required")
+	} else if u, err := url.Parse(cfg.ProviderURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		// The value is not repeated in the error: it may contain a secret token.
+		p.fail("PROVIDER_URL must be an absolute http or https URL")
 	}
 
-	if err := cfg.LogLevel.UnmarshalText([]byte(stringOr(getenv("LOG_LEVEL"), defaultLogLevel))); err != nil {
-		errs = append(errs, fmt.Errorf("LOG_LEVEL: %w", err))
-	}
-
-	if raw := strings.TrimSpace(getenv("SHUTDOWN_TIMEOUT")); raw != "" {
-		d, err := time.ParseDuration(raw)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("SHUTDOWN_TIMEOUT: %w", err))
-		case d <= 0:
-			errs = append(errs, fmt.Errorf("SHUTDOWN_TIMEOUT: must be positive, got %s", d))
-		default:
-			cfg.ShutdownTimeout = d
+	// A claimed row must not outlive its lease while it waits: in the worst case it waits
+	// for every row ahead of it (claim batch plus busy senders) to get a rate-limit token,
+	// then for one provider call. Otherwise another worker could claim it and send twice.
+	w := cfg.Worker
+	if w.RatePerSecond > 0 {
+		queueWait := time.Duration(w.ClaimBatchSize+w.SendersPerChannel) * time.Second / time.Duration(w.RatePerSecond)
+		if minimum := cfg.ProviderTimeout + queueWait; w.Lease <= minimum {
+			p.fail("LEASE_DURATION (%s) must be longer than PROVIDER_TIMEOUT plus the worst rate-limit wait (%s)", w.Lease, minimum)
 		}
 	}
 
-	if raw := strings.TrimSpace(getenv("MAX_ATTEMPTS")); raw != "" {
-		n, err := strconv.Atoi(raw)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Errorf("MAX_ATTEMPTS: %w", err))
-		case n < 1 || n > maxMaxAttempts:
-			errs = append(errs, fmt.Errorf("MAX_ATTEMPTS: must be between 1 and %d, got %d", maxMaxAttempts, n))
-		default:
-			cfg.MaxAttempts = n
-		}
-	}
-
-	if err := errors.Join(errs...); err != nil {
+	if err := errors.Join(p.errs...); err != nil {
 		return Config{}, fmt.Errorf("invalid configuration: %w", err)
 	}
 	return cfg, nil
 }
 
-func stringOr(value, fallback string) string {
-	if v := strings.TrimSpace(value); v != "" {
+// parser collects errors instead of stopping at the first, so Load can report them all.
+type parser struct {
+	getenv func(string) string
+	errs   []error
+}
+
+func (p *parser) fail(format string, args ...any) {
+	p.errs = append(p.errs, fmt.Errorf(format, args...))
+}
+
+func (p *parser) str(name, fallback string) string {
+	if v := strings.TrimSpace(p.getenv(name)); v != "" {
 		return v
 	}
 	return fallback
+}
+
+func (p *parser) duration(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(p.getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	switch {
+	case err != nil:
+		p.fail("%s: %w", name, err)
+	case d <= 0:
+		p.fail("%s: must be positive, got %s", name, d)
+	default:
+		return d
+	}
+	return fallback
+}
+
+func (p *parser) integer(name string, fallback, lo, hi int) int {
+	raw := strings.TrimSpace(p.getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	switch {
+	case err != nil:
+		p.fail("%s: %w", name, err)
+	case n < lo || n > hi:
+		p.fail("%s: must be between %d and %d, got %d", name, lo, hi, n)
+	default:
+		return n
+	}
+	return fallback
+}
+
+// weights parses "high,normal,low", for example "70,20,10".
+func (p *parser) weights(name string, fallback [3]int) [3]int {
+	raw := strings.TrimSpace(p.getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) != 3 {
+		p.fail("%s: want three comma-separated weights for high,normal,low, got %q", name, raw)
+		return fallback
+	}
+	var w [3]int
+	for i, part := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || n < 1 || n > 1000 {
+			p.fail("%s: each weight must be an integer from 1 to 1000, got %q", name, part)
+			return fallback
+		}
+		w[i] = n
+	}
+	return w
 }
