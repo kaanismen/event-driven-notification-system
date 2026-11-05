@@ -4,6 +4,8 @@ TEST_POSTGRES_PORT ?= 55432
 TEST_DATABASE_URL  ?= postgres://postgres:test@localhost:$(TEST_POSTGRES_PORT)/postgres?sslmode=disable
 # Extra flags for go test, e.g. `make test TESTFLAGS=-race` (the race detector needs cgo).
 TESTFLAGS ?=
+# Pinned so a new linter release cannot fail an unchanged spec (ADR-0018).
+REDOCLY_VERSION ?= 2.64.1
 
 .DEFAULT_GOAL := help
 
@@ -54,6 +56,10 @@ load: ## Post batches of notifications and watch /metrics until the queue drains
 .PHONY: lint
 lint: ## Run golangci-lint (includes go vet and gofmt/goimports checks)
 	golangci-lint run ./...
+
+.PHONY: lint-spec
+lint-spec: ## Validate the OpenAPI spec with Redocly (needs Node.js)
+	npx --yes @redocly/cli@$(REDOCLY_VERSION) lint api/openapi.yaml
 
 .PHONY: fmt
 fmt: ## Format all Go code

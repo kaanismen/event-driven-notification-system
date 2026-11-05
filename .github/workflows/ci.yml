@@ -1,0 +1,72 @@
+# Continuous integration (ADR-0018). Four independent jobs, so one failure does not
+# hide another:
+#   lint  - golangci-lint, the same version and config as `make lint`
+#   test  - `make test` with the race detector: unit and integration tests on Postgres
+#   spec  - the OpenAPI spec is valid and follows Redocly's recommended rules
+#   e2e   - the one-command setup works: `docker compose up`, then `make smoke`
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only token: the workflow never writes to the repository.
+permissions:
+  contents: read
+
+# A newer push to the same branch makes an older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned to a commit, not a tag, because a tag can be moved to other code.
+# The comment names the release the commit belongs to.
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The same toolchain as the Dockerfile; go.mod only states the minimum.
+          go-version: '1.27.x'
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      # make test starts the disposable Postgres from docker-compose.yml (ADR-0010).
+      # GitHub's Linux runners have Docker and a C compiler, so the race detector works.
+      - run: make test TESTFLAGS=-race
+      - name: Stop the test database
+        if: always()
+        run: make test-db-down
+
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Node.js is preinstalled on the runner; the Makefile pins the Redocly version.
+      - run: make lint-spec
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # No .env exists here, so the defaults apply and the bundled mock provider
+      # receives the notifications.
+      - run: docker compose up --build --detach --wait
+      - run: make smoke
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes
