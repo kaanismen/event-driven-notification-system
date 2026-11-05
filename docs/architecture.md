@@ -95,7 +95,7 @@ stateDiagram-v2
    claimed rows that were not sent are released back to `pending` with their attempt given back
    (ADR-0014).
 
-## Data model (indicative, finalized in Phases 1-2)
+## Data model
 
 `notifications`: `id` (UUID), `batch_id` (nullable), `channel`, `recipient`, `content`, `priority`,
 `status`, `attempts`, `max_attempts`, `next_attempt_at`, `locked_until`, `last_error`,
@@ -112,6 +112,7 @@ lease-recovery half of the claim (rows whose worker crashed). Migration `000001`
 ## Package layout
 
 ```
+api/                   OpenAPI spec (openapi.yaml), embedded and served at /openapi.yaml
 cmd/notifier/          main: wiring, config, signal handling, graceful shutdown
 cmd/mockprovider/      the mock provider as a server, with injectable failures
 internal/config/       environment variables to a typed Config struct

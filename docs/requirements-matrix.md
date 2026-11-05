@@ -67,7 +67,7 @@ will write. Status is updated at the end of each phase.
 
 | ID | Expectation (paraphrased) | Phase | Test | Evidence | Status |
 |----|---------------------------|-------|------|----------|--------|
-| NFR-01 | Handle millions of notifications per day | 0, 5 | D, E | Capacity reasoning in ADR-0001; load script numbers in the README | Phase 5 part done (numbers in ADR-0016; README in Phase 6) |
+| NFR-01 | Handle millions of notifications per day | 0, 5 | D, E | Capacity reasoning in ADR-0001; load script numbers in the README | Done |
 | NFR-02 | Absorb traffic bursts without dropping requests | 3, 5 | E | Large batch is accepted quickly; queue drains at the rate limit (`make load`: 10,000 accepted in about 1 s, drained at about 100/s per channel) | Done |
 | NFR-03 | Reliable delivery (no silent loss) | 4 | I, F | At-least-once semantics per ADR-0005 | Done |
 | NFR-04 | Status visible to API consumers and internal teams | 2, 5 | H, E | Status endpoints plus metrics and logs | Done |
@@ -77,12 +77,12 @@ will write. Status is updated at the end of each phase.
 
 | ID | Deliverable (paraphrased) | Phase | Test | Evidence | Status |
 |----|---------------------------|-------|------|----------|--------|
-| DEL-01 | Public Git repository with a clean, readable commit history | all | D | Conventional Commits, one logical change per commit | In progress |
-| DEL-02 | README with setup steps, architecture overview and API examples | 6 | D | README review from a fresh clone | Planned |
-| DEL-03 | One-command local setup with Docker Compose | 1, 6 | E | `docker compose up` on a clean clone starts app + Postgres | Phase 1 part done |
-| DEL-04 | API documentation as an OpenAPI (Swagger) specification | 6 | D | `/openapi.yaml` served and matches the handlers | Planned |
-| DEL-05 | Versioned database migrations | 1+ | I | Migrations apply up and down cleanly in the test run | Phase 1 part done |
-| DEL-06 | Test suite runnable with a single command | 1, 6 | E, D | `make test` green locally and in CI | Phase 1 part done |
+| DEL-01 | Public Git repository with a clean, readable commit history | all | D | Conventional Commits, one logical change per commit | Done (the maintainer publishes the repository) |
+| DEL-02 | README with setup steps, architecture overview and API examples | 6 | D | README review from a fresh clone | Done |
+| DEL-03 | One-command local setup with Docker Compose | 1, 6 | E | `docker compose up` on a clean clone starts app + Postgres; the CI `e2e` job repeats it on every push | Done |
+| DEL-04 | API documentation as an OpenAPI (Swagger) specification | 6 | D | `/openapi.yaml` served; a test compares it with the routes; Redocly lint in CI (ADR-0018) | Done |
+| DEL-05 | Versioned database migrations | 1+ | I | Migrations apply up and down cleanly in the test run (`TestMigrationsUpDownUp`) | Done |
+| DEL-06 | Test suite runnable with a single command | 1, 6 | E, D | `make test` green locally and in CI | Done locally; CI runs on the first push |
 
 ## 7. Optional bonus features
 
@@ -93,4 +93,4 @@ will write. Status is updated at the end of each phase.
 | BON-03 | Message templates with variables | Out of scope unless requested | - | - |
 | BON-04 | Real-time status via WebSocket | Out of scope unless requested | - | - |
 | BON-05 | Distributed tracing | Out of scope; correlation IDs are the lightweight substitute | - | - |
-| BON-06 | CI pipeline (tests + lint) on GitHub Actions | After approval | 6 | D |
+| BON-06 | CI pipeline (tests + lint) on GitHub Actions | Done in Phase 6 (ADR-0018): lint, race-enabled tests, OpenAPI lint and an end-to-end smoke run | 6 | D |
