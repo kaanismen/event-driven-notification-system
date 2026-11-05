@@ -24,6 +24,10 @@ info:
     it can deduplicate. The design decisions behind this contract are recorded as ADRs in
     the repository's `docs/adr` folder.
 
+    Message templates hold reusable text with `{{name}}` placeholders. A notification can
+    name a template and give the values instead of sending `content`; the text is filled
+    in when the request arrives, and the notification stores the final text.
+
     Every response carries an `X-Request-ID` header. Errors use one JSON shape (`Error`).
 servers:
   - url: http://localhost:8080
@@ -35,6 +39,8 @@ tags:
     description: Create, read, list and cancel single notifications.
   - name: Batches
     description: Create up to 1000 notifications at once and track them together.
+  - name: Templates
+    description: Reusable message text with variables. Templates cannot be changed once created.
   - name: Operations
     description: Health checks, metrics and this specification.
 
@@ -66,6 +72,14 @@ paths:
                   recipient: '+905551234567'
                   content: Your verification code is 482913
                   priority: high
+              fromTemplate:
+                summary: An SMS rendered from a template (the channel comes from the template)
+                value:
+                  templateId: 019a5b70-1c2d-7e3f-8a4b-5c6d7e8f9a0b
+                  recipient: '+905551234567'
+                  variables:
+                    name: Ayşe
+                    code: '482913'
               scheduledPush:
                 summary: A push notification sent no earlier than a given time
                 value:
@@ -373,6 +387,152 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/templates:
+    post:
+      tags: [Templates]
+      operationId: createTemplate
+      summary: Create a template
+      description: |
+        Creates an immutable template. Placeholders are `{{name}}`, where the name has
+        letters, digits and `_` and does not start with a digit; spaces inside the braces
+        are allowed (`{{ name }}`). There is no logic, escaping or default value, and a
+        literal `{{` cannot appear in a template.
+
+        The text outside the placeholders must already fit the channel's limit. The
+        complete text is checked again for each notification, once the values are filled
+        in.
+
+        Names are unique. Sending the same name, channel and body again returns the
+        existing template (`200`, `Idempotent-Replayed: true`), so a create can be retried
+        safely. The same name with a different channel or body is `409`: templates
+        cannot be changed, so a new wording needs a new name.
+      parameters:
+        - $ref: '#/components/parameters/RequestID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TemplateRequest'
+            example:
+              name: otp
+              channel: sms
+              body: Hi {{name}}, your verification code is {{code}}
+      responses:
+        '201':
+          description: Created.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '200':
+          description: The same template already existed and is returned unchanged.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+            Location:
+              $ref: '#/components/headers/Location'
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: A different template already has this name.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: template_name_taken
+                message: a different template already has this name; templates cannot be changed, so choose a new name
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [Templates]
+      operationId: listTemplates
+      summary: List templates
+      description: Newest first, with the same cursor pagination as the notification list.
+      parameters:
+        - name: channel
+          in: query
+          schema:
+            $ref: '#/components/schemas/Channel'
+        - name: limit
+          in: query
+          description: Page size.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: cursor
+          in: query
+          description: The `nextCursor` value of the previous page.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/RequestID'
+      responses:
+        '200':
+          description: One page of templates.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplatePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/templates/{id}:
+    get:
+      tags: [Templates]
+      operationId: getTemplate
+      summary: Get a template
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The template ID.
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/RequestID'
+      responses:
+        '200':
+          description: The template.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Template'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /livez:
     get:
       tags: [Operations]
@@ -641,7 +801,11 @@ components:
     NotificationRequest:
       type: object
       additionalProperties: false
-      required: [channel, recipient, content]
+      description: |
+        Give either `content`, or `templateId` with `variables`, never both. `channel` is
+        required with `content`; with a template it may be omitted and defaults to the
+        template's channel (if given, it must match).
+      required: [recipient]
       properties:
         channel:
           $ref: '#/components/schemas/Channel'
@@ -656,9 +820,26 @@ components:
           type: string
           description: |
             The message text; must not be blank. Limits in characters (Unicode code points,
-            not bytes): `sms` 160 (one segment), `push` 256, `email` 10,000.
+            not bytes): `sms` 160 (one segment), `push` 256, `email` 10,000. For a templated
+            request these limits apply to the rendered text, and errors about it are reported
+            on the field `content`.
           maxLength: 10000
           example: Your verification code is 482913
+        templateId:
+          type: string
+          format: uuid
+          description: A template to render the content from, instead of sending `content`.
+        variables:
+          type: object
+          description: |
+            One string value per placeholder of the template. A missing value, or a value
+            for a name the template does not use (usually a typo), is a `422`. Values are
+            inserted as they are and are not themselves rendered.
+          additionalProperties:
+            type: string
+          example:
+            name: Ayşe
+            code: '482913'
         priority:
           $ref: '#/components/schemas/Priority'
           default: normal
@@ -710,6 +891,10 @@ components:
           type: string
           format: date-time
           description: The requested earliest send time, if one was given.
+        templateId:
+          type: string
+          format: uuid
+          description: The template `content` was rendered from, if any.
         lastError:
           type: string
           description: The last provider error (status code and the start of the response), if any.
@@ -805,6 +990,59 @@ components:
           items:
             $ref: '#/components/schemas/Notification'
 
+    TemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, channel, body]
+      properties:
+        name:
+          type: string
+          description: Unique. Letters, digits, `.`, `_` and `-`, starting with a letter or digit.
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+          maxLength: 100
+          example: order-shipped
+        channel:
+          $ref: '#/components/schemas/Channel'
+        body:
+          type: string
+          description: The text with `{{name}}` placeholders, at most 50 different ones.
+          example: Hi {{name}}, your order {{order}} has shipped
+
+    Template:
+      type: object
+      required: [id, name, channel, body, variables, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        channel:
+          $ref: '#/components/schemas/Channel'
+        body:
+          type: string
+        variables:
+          type: array
+          description: The placeholder names, in order of first appearance. A notification must give a value for each.
+          items:
+            type: string
+          example: [name, order]
+        createdAt:
+          type: string
+          format: date-time
+
+    TemplatePage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Template'
+        nextCursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page; `null` on the last page.
+
     Health:
       type: object
       required: [status]
@@ -832,6 +1070,7 @@ components:
             - invalid_idempotency_key
             - not_found
             - idempotency_key_conflict
+            - template_name_taken
             - not_cancellable
             - request_too_large
             - validation_failed

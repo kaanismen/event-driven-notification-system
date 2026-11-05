@@ -25,6 +25,11 @@ type Store interface {
 	GetBatch(ctx context.Context, batchID uuid.UUID) ([]notification.Notification, error)
 	Cancel(ctx context.Context, id uuid.UUID) (notification.Notification, error)
 	List(ctx context.Context, f store.ListFilter) (store.ListPage, error)
+
+	CreateTemplate(ctx context.Context, name string, channel notification.Channel, body string) (notification.Template, bool, error)
+	GetTemplate(ctx context.Context, id uuid.UUID) (notification.Template, error)
+	GetTemplates(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]notification.Template, error)
+	ListTemplates(ctx context.Context, f store.TemplateFilter) (store.TemplatePage, error)
 }
 
 // Deps are what the handler needs from the rest of the program.
@@ -96,6 +101,9 @@ func (a *api) routes(metrics http.Handler) []route {
 		{"POST /v1/notifications/{id}/cancel", http.HandlerFunc(a.cancelNotification)},
 		{"POST /v1/batches", http.HandlerFunc(a.createBatch)},
 		{"GET /v1/batches/{id}", http.HandlerFunc(a.getBatch)},
+		{"POST /v1/templates", http.HandlerFunc(a.createTemplate)},
+		{"GET /v1/templates", http.HandlerFunc(a.listTemplates)},
+		{"GET /v1/templates/{id}", http.HandlerFunc(a.getTemplate)},
 	}
 }
 

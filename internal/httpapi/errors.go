@@ -69,6 +69,9 @@ func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSON(w, ae.status, ae.body)
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "no resource with this ID")
+	case errors.Is(err, store.ErrTemplateNameTaken):
+		writeError(w, http.StatusConflict, "template_name_taken",
+			"a different template already has this name; templates cannot be changed, so choose a new name")
 	case errors.Is(err, store.ErrIdempotencyConflict):
 		writeError(w, http.StatusConflict, "idempotency_key_conflict",
 			"this Idempotency-Key was already used with a different request")

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/kaanismen/event-driven-notification-system/internal/logging"
 	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 	"github.com/kaanismen/event-driven-notification-system/internal/store"
@@ -23,6 +25,10 @@ type createRequest struct {
 	// ScheduledAt is a string, not a time.Time, so a malformed value becomes a field
 	// error with a clear message (422) instead of a generic JSON decoding error (400).
 	ScheduledAt string `json:"scheduledAt"`
+	// TemplateID and Variables replace Content (ADR-0019). TemplateID is a string for the
+	// same reason as ScheduledAt: a malformed ID should be a field error, not a 400.
+	TemplateID string            `json:"templateId"`
+	Variables  map[string]string `json:"variables"`
 }
 
 // toDomain converts and normalizes the request. A scheduledAt that is not a valid
@@ -50,10 +56,82 @@ func (c createRequest) toDomain() (notification.Request, []notification.FieldErr
 	return r.Normalized(), errs
 }
 
-// validate converts one wire request and returns it with every problem found.
-func (a *api) validate(c createRequest) (notification.Request, []notification.FieldError) {
+// applyTemplate renders the content of a templated request into req (ADR-0019). The
+// rendered text is then validated like any other content, so the channel's length limit
+// applies to what will actually be sent. templates holds every template the request
+// names; one that is missing does not exist.
+func (c createRequest) applyTemplate(req *notification.Request, templates map[uuid.UUID]notification.Template) []notification.FieldError {
+	if c.TemplateID == "" {
+		if c.Variables != nil {
+			return []notification.FieldError{{Field: "variables", Message: "requires templateId"}}
+		}
+		return nil
+	}
+	id, err := uuid.Parse(c.TemplateID)
+	if err != nil {
+		return []notification.FieldError{{Field: "templateId", Message: "must be a UUID"}}
+	}
+
+	var errs []notification.FieldError
+	if c.Content != "" {
+		errs = append(errs, notification.FieldError{Field: "content", Message: "must be omitted when templateId is given; the template provides it"})
+	}
+	t, ok := templates[id]
+	if !ok {
+		return append(errs, notification.FieldError{Field: "templateId", Message: "no template with this ID"})
+	}
+	switch req.Channel {
+	case "":
+		req.Channel = t.Channel // the template already says where it can be sent
+	case t.Channel:
+	default:
+		errs = append(errs, notification.FieldError{
+			Field: "channel", Message: fmt.Sprintf("must be %s, the channel of the template, or omitted", t.Channel),
+		})
+	}
+	content, renderErrs := t.Render(c.Variables)
+	errs = append(errs, renderErrs...)
+	req.Content = content
+	req.TemplateID = &t.ID
+	return errs
+}
+
+// validate converts one wire request, renders its template if it names one, and returns
+// it with every problem found.
+func (a *api) validate(c createRequest, templates map[uuid.UUID]notification.Template) (notification.Request, []notification.FieldError) {
 	req, errs := c.toDomain()
-	return req, append(errs, req.Validate(time.Now(), a.maxScheduleAhead)...)
+	templateErrs := c.applyTemplate(&req, templates)
+	errs = append(errs, templateErrs...)
+	for _, e := range req.Validate(time.Now(), a.maxScheduleAhead) {
+		// When the template step failed there is no rendered text to judge, and the
+		// template errors already say what is wrong.
+		if e.Field == "content" && len(templateErrs) > 0 {
+			continue
+		}
+		errs = append(errs, e)
+	}
+	return req, errs
+}
+
+// templatesFor loads every template the requests name, with one query for a whole
+// batch. Malformed IDs are skipped here; validation reports them.
+func (a *api) templatesFor(ctx context.Context, items []createRequest) (map[uuid.UUID]notification.Template, error) {
+	var ids []uuid.UUID
+	seen := map[uuid.UUID]bool{}
+	for _, it := range items {
+		if id, err := uuid.Parse(it.TemplateID); err == nil && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil // reading a nil map is fine: every lookup misses
+	}
+	templates, err := a.store.GetTemplates(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load templates: %w", err)
+	}
+	return templates, nil
 }
 
 type batchRequest struct {
@@ -72,6 +150,7 @@ type notificationResponse struct {
 	MaxAttempts       int        `json:"maxAttempts"`
 	NextAttemptAt     *time.Time `json:"nextAttemptAt,omitempty"`
 	ScheduledAt       *time.Time `json:"scheduledAt,omitempty"`
+	TemplateID        string     `json:"templateId,omitempty"`
 	LastError         string     `json:"lastError,omitempty"`
 	ProviderMessageID string     `json:"providerMessageId,omitempty"`
 	CorrelationID     string     `json:"correlationId,omitempty"`
@@ -100,6 +179,9 @@ func toResponse(n notification.Notification) notificationResponse {
 	}
 	if n.BatchID != nil {
 		resp.BatchID = n.BatchID.String()
+	}
+	if n.TemplateID != nil {
+		resp.TemplateID = n.TemplateID.String()
 	}
 	// The next attempt time only means something while the notification waits to be sent.
 	if n.Status == notification.StatusPending {
@@ -133,7 +215,12 @@ func (a *api) createNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, errs := a.validate(body)
+	templates, err := a.templatesFor(r.Context(), []createRequest{body})
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	req, errs := a.validate(body, templates)
 	if len(errs) > 0 {
 		a.fail(w, r, validationFailed(fieldErrors(nil, errs)))
 		return
@@ -172,11 +259,16 @@ func (a *api) createBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	templates, err := a.templatesFor(r.Context(), body.Notifications)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
 	reqs := make([]notification.Request, len(body.Notifications))
 	var details []fieldErrorBody
 	for i, item := range body.Notifications {
 		var errs []notification.FieldError
-		reqs[i], errs = a.validate(item)
+		reqs[i], errs = a.validate(item, templates)
 		if len(errs) > 0 {
 			index := i
 			details = append(details, fieldErrors(&index, errs)...)
