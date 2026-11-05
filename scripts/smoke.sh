@@ -112,6 +112,10 @@ if [ "$(field status)$(field currentStatus)" != "$first_cancel" ]; then
 	exit 1
 fi
 check POST "/v1/notifications/00000000-0000-0000-0000-000000000000/cancel" 404
+# The real-time endpoints are WebSockets (cmd/watch is the client); curl can only check
+# that a plain request is refused with the API's 426.
+check GET "/v1/notifications/$id/events" 426
+check GET "/v1/batches/$batch/events" 426
 
 echo "== scheduled"
 # GNU date (Linux, Git Bash) first, then BSD date (macOS).
