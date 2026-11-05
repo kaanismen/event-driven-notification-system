@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
+	// Aliased because this package already has a type named api.
+	openapi "github.com/kaanismen/insider-assessment/api"
 	"github.com/kaanismen/insider-assessment/internal/notification"
 	"github.com/kaanismen/insider-assessment/internal/store"
 )
@@ -57,18 +59,9 @@ func NewHandler(d Deps) http.Handler {
 	}
 
 	mux := http.NewServeMux()
-	// Liveness and readiness are separate questions (ADR-0016). /health predates the
-	// split and stays as an alias of /livez, so existing checks keep working.
-	mux.HandleFunc("GET /livez", handleLive)
-	mux.HandleFunc("GET /health", handleLive)
-	mux.HandleFunc("GET /readyz", a.handleReady)
-	mux.Handle("GET /metrics", d.Metrics)
-	mux.HandleFunc("POST /v1/notifications", a.createNotification)
-	mux.HandleFunc("GET /v1/notifications", a.listNotifications)
-	mux.HandleFunc("GET /v1/notifications/{id}", a.getNotification)
-	mux.HandleFunc("POST /v1/notifications/{id}/cancel", a.cancelNotification)
-	mux.HandleFunc("POST /v1/batches", a.createBatch)
-	mux.HandleFunc("GET /v1/batches/{id}", a.getBatch)
+	for _, rt := range a.routes(d.Metrics) {
+		mux.Handle(rt.pattern, rt.handler)
+	}
 
 	// The first middleware listed runs first: the request ID must exist before anything
 	// logs, and recovery sits inside the access log so a panic is logged as a 500.
@@ -77,6 +70,40 @@ func NewHandler(d Deps) http.Handler {
 		accessLog(d.Logger),
 		recoverPanic(d.Logger),
 	)
+}
+
+// route is one endpoint: a Go 1.22 mux pattern ("METHOD /path/{param}") and its handler.
+type route struct {
+	pattern string
+	handler http.Handler
+}
+
+// routes is the one list of everything the server serves. A test compares it with the
+// OpenAPI spec in both directions, so an endpoint cannot be added, removed or renamed
+// without the spec following.
+func (a *api) routes(metrics http.Handler) []route {
+	return []route{
+		// Liveness and readiness are separate questions (ADR-0016). /health predates the
+		// split and stays as an alias of /livez, so existing checks keep working.
+		{"GET /livez", http.HandlerFunc(handleLive)},
+		{"GET /health", http.HandlerFunc(handleLive)},
+		{"GET /readyz", http.HandlerFunc(a.handleReady)},
+		{"GET /metrics", metrics},
+		{"GET /openapi.yaml", http.HandlerFunc(handleSpec)},
+		{"POST /v1/notifications", http.HandlerFunc(a.createNotification)},
+		{"GET /v1/notifications", http.HandlerFunc(a.listNotifications)},
+		{"GET /v1/notifications/{id}", http.HandlerFunc(a.getNotification)},
+		{"POST /v1/notifications/{id}/cancel", http.HandlerFunc(a.cancelNotification)},
+		{"POST /v1/batches", http.HandlerFunc(a.createBatch)},
+		{"GET /v1/batches/{id}", http.HandlerFunc(a.getBatch)},
+	}
+}
+
+// handleSpec serves the OpenAPI specification embedded at build time (ADR-0018).
+func handleSpec(w http.ResponseWriter, _ *http.Request) {
+	// application/yaml is the registered media type for YAML (RFC 9512).
+	w.Header().Set("Content-Type", "application/yaml")
+	_, _ = w.Write(openapi.Spec)
 }
 
 // handleLive is the liveness check: it only proves the process can serve HTTP. It does

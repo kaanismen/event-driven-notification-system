@@ -1,0 +1,8 @@
+# Configuration for `redocly lint api/openapi.yaml`, which CI runs (ADR-0018).
+extends:
+  - recommended
+rules:
+  # The repository has no license chosen yet; the spec will name it once it has one.
+  info-license: off
+  # The only server is the local Docker Compose stack, so localhost is correct.
+  no-server-example.com: off
