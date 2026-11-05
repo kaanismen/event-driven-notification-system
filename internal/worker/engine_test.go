@@ -193,7 +193,7 @@ func TestRateLimitPerChannel(t *testing.T) {
 		rows = append(rows, rowsFor(c, perChannel)...)
 	}
 	f := newFakeStore(rows)
-	m := mock.NewRecorder()
+	m := mock.NewRecorder(mock.Options{})
 	srv := httptest.NewServer(m)
 	defer srv.Close()
 
@@ -230,7 +230,7 @@ func TestDeliveryRecordsResultsAndCarriesTheRequestID(t *testing.T) {
 	rows := rowsFor(notification.ChannelSMS, 4)
 	rows[1].Content, rows[3].Content = "reject", "reject"
 
-	m := mock.NewRecorder()
+	m := mock.NewRecorder(mock.Options{})
 	// Reject messages whose content is "reject"; hand everything else to the mock.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)

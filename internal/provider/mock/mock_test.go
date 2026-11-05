@@ -17,7 +17,7 @@ import (
 
 // The mock must speak the same contract the real client expects.
 func TestMockWithRealClient(t *testing.T) {
-	m := mock.NewRecorder()
+	m := mock.NewRecorder(mock.Options{})
 	srv := httptest.NewServer(m)
 	defer srv.Close()
 
@@ -45,7 +45,7 @@ func TestMockWithRealClient(t *testing.T) {
 }
 
 func TestMockRejectsBadRequests(t *testing.T) {
-	m := mock.NewRecorder()
+	m := mock.NewRecorder(mock.Options{})
 	for _, tt := range []struct {
 		method, body string
 		want         int

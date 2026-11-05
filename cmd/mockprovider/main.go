@@ -38,15 +38,22 @@ func run() error {
 	}
 	logger := logging.New(os.Stdout, level).With("component", "mockprovider")
 
+	opts, err := mock.ParseOptions(os.Getenv)
+	if err != nil {
+		return err
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           mock.NewLogging(logger),
+		Handler:           mock.NewLogging(logger, opts),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	serveErr := make(chan error, 1)
 	go func() {
-		logger.Info("mock provider listening", "addr", addr)
+		logger.Info("mock provider listening", "addr", addr,
+			"fail_first", opts.FailFirst, "failure_rate", opts.FailureRate, "failure_status", opts.FailureStatus,
+			"retry_after", opts.RetryAfter.String(), "latency", opts.Latency.String())
 		serveErr <- srv.ListenAndServe()
 	}()
 

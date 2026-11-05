@@ -57,13 +57,19 @@ services:
 
   # Stand-in delivery provider (ADR-0013): answers 202 with a unique messageId and logs
   # each request. The default PROVIDER_URL points here; `docker compose logs mockprovider`
-  # shows what the workers sent.
+  # shows what the workers sent. The MOCK_* settings inject failures (ADR-0014), for
+  # example `MOCK_FAILURE_RATE=0.3 docker compose up -d mockprovider`.
   mockprovider:
     build: .
     entrypoint: ["/mockprovider"]
     environment:
       MOCK_ADDR: ":8081"
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      MOCK_FAIL_FIRST: ${MOCK_FAIL_FIRST:-0}
+      MOCK_FAILURE_RATE: ${MOCK_FAILURE_RATE:-0}
+      MOCK_FAILURE_STATUS: ${MOCK_FAILURE_STATUS:-503}
+      MOCK_RETRY_AFTER: ${MOCK_RETRY_AFTER:-0s}
+      MOCK_LATENCY: ${MOCK_LATENCY:-0s}
     restart: unless-stopped
 
   # Throwaway server for integration tests (ADR-0010). Started only by `make test`
