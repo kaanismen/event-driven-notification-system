@@ -6,12 +6,13 @@ import (
 	"time"
 )
 
-// windowMargin widens the one-second window slightly. The cap is exact for the moments
-// at which we start sends; between that moment and the provider receiving the request,
-// goroutine scheduling and the network add a little jitter (about 0.5 ms measured
-// locally), which could otherwise squeeze two sends at the window edges together. The
-// margin costs 0.2% of throughput (ADR-0003).
-const windowMargin = 2 * time.Millisecond
+// windowMargin widens the one-second window by one send interval (10 ms at 100/s). The
+// cap is exact for the moments at which we start sends; between that moment and the
+// provider receiving the request, goroutine scheduling and the network add jitter that
+// can squeeze two sends at the window edges together. Measured at the mock provider: about
+// 0.5 ms on an idle machine, and more than 2 ms with the CPU saturated (2 ms let 101 through,
+// 5 ms and 10 ms held). The cost is about 1% of throughput: 100 sends per 1.01 s (ADR-0003).
+const windowMargin = 10 * time.Millisecond
 
 // windowCap allows at most n events in any time window of the given length, measured on
 // the actual event times. The token bucket in front of it paces sends 10 ms apart, but
