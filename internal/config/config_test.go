@@ -25,14 +25,15 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	want := Config{
-		HTTPAddr:        ":8080",
-		DatabaseURL:     "postgres://localhost/db",
-		DBMaxConns:      20,
-		LogLevel:        slog.LevelInfo,
-		ShutdownTimeout: 15 * time.Second,
-		MaxAttempts:     8,
-		ProviderURL:     "https://webhook.example/secret-token",
-		ProviderTimeout: 10 * time.Second,
+		HTTPAddr:           ":8080",
+		DatabaseURL:        "postgres://localhost/db",
+		DBMaxConns:         20,
+		LogLevel:           slog.LevelInfo,
+		ShutdownTimeout:    15 * time.Second,
+		ShutdownDrainDelay: 2 * time.Second,
+		MaxAttempts:        8,
+		ProviderURL:        "https://webhook.example/secret-token",
+		ProviderTimeout:    10 * time.Second,
 		Worker: Worker{
 			RatePerSecond:     100,
 			SendersPerChannel: 50,
@@ -56,6 +57,7 @@ func TestLoadOverrides(t *testing.T) {
 		"HTTP_ADDR":                 ":9090",
 		"LOG_LEVEL":                 "debug",
 		"SHUTDOWN_TIMEOUT":          "3s",
+		"SHUTDOWN_DRAIN_DELAY":      "0s",
 		"MAX_ATTEMPTS":              "3",
 		"DB_MAX_CONNS":              "40",
 		"PROVIDER_TIMEOUT":          "2s",
@@ -75,6 +77,7 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	w := cfg.Worker
 	if cfg.HTTPAddr != ":9090" || cfg.LogLevel != slog.LevelDebug || cfg.ShutdownTimeout != 3*time.Second ||
+		cfg.ShutdownDrainDelay != 0 ||
 		cfg.MaxAttempts != 3 || cfg.DBMaxConns != 40 || cfg.ProviderTimeout != 2*time.Second ||
 		w.RatePerSecond != 10 || w.SendersPerChannel != 5 || w.ClaimBatchSize != 5 ||
 		w.PollInterval != time.Second || w.Lease != time.Minute || w.PriorityWeights != [3]int{5, 3, 2} ||
@@ -107,6 +110,7 @@ func TestLoadReportsAllErrors(t *testing.T) {
 			wantErr: []string{"LOG_LEVEL", "SHUTDOWN_TIMEOUT", "MAX_ATTEMPTS", "RATE_LIMIT_PER_SECOND", "PRIORITY_WEIGHTS"},
 		},
 		{"non-positive duration", map[string]string{"SHUTDOWN_TIMEOUT": "0s"}, []string{"must be positive"}},
+		{"negative drain delay", map[string]string{"SHUTDOWN_DRAIN_DELAY": "-1s"}, []string{"must not be negative"}},
 		{"max attempts out of range", map[string]string{"MAX_ATTEMPTS": "0"}, []string{"between 1 and 20"}},
 		{"claim batch too small", map[string]string{"CLAIM_BATCH_SIZE": "2"}, []string{"CLAIM_BATCH_SIZE"}},
 		{"zero weight could starve a level", map[string]string{"PRIORITY_WEIGHTS": "70,30,0"}, []string{"PRIORITY_WEIGHTS"}},

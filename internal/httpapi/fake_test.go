@@ -110,7 +110,7 @@ func newTestServer(t *testing.T) *testServer {
 	t.Helper()
 	fs := &fakeStore{}
 	var logs bytes.Buffer
-	return &testServer{t: t, h: NewHandler(logging.New(&logs, slog.LevelDebug), fs, 8), store: fs, logs: &logs}
+	return &testServer{t: t, h: NewHandler(testDeps(logging.New(&logs, slog.LevelDebug), fs)), store: fs, logs: &logs}
 }
 
 // do sends a request; headers are given as alternating name, value pairs.

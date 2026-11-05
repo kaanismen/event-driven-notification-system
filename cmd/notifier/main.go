@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -70,9 +71,26 @@ func run() error {
 	// Only the host is logged: the full webhook.site URL works like a password.
 	logger.Info("delivery engine started", "provider_host", hostOf(cfg.ProviderURL))
 
+	// draining flips to true on the shutdown signal, so readiness fails before the
+	// listener closes (ADR-0016).
+	var draining atomic.Bool
+	ready := func(ctx context.Context) error {
+		if draining.Load() {
+			return errors.New("shutting down")
+		}
+		if err := pool.Ping(ctx); err != nil {
+			// The reason is shown to callers, so the driver's error stays in the logs.
+			logger.WarnContext(ctx, "readiness check: database ping failed", "error", err)
+			return errors.New("database unreachable")
+		}
+		return nil
+	}
+
 	srv := &http.Server{
-		Addr:    cfg.HTTPAddr,
-		Handler: httpapi.NewHandler(logger, st, cfg.MaxAttempts),
+		Addr: cfg.HTTPAddr,
+		Handler: httpapi.NewHandler(httpapi.Deps{
+			Logger: logger, Store: st, MaxAttempts: cfg.MaxAttempts, Ready: ready, Metrics: m.Handler(),
+		}),
 		// Explicit timeouts: the zero values mean "wait forever", which lets slow or idle
 		// clients hold connections open indefinitely.
 		ReadHeaderTimeout: 5 * time.Second,
@@ -98,6 +116,15 @@ func run() error {
 		return fmt.Errorf("http server: %w", err)
 	case <-ctx.Done():
 		logger.Info("shutdown signal received", "timeout", cfg.ShutdownTimeout.String())
+	}
+
+	// Fail readiness first and keep serving for a moment: a load balancer polling
+	// /readyz then stops sending new requests here before the listener closes, instead
+	// of seeing refused connections. The engine already stopped claiming.
+	draining.Store(true)
+	if cfg.ShutdownDrainDelay > 0 {
+		logger.Info("readiness now failing; waiting before closing the listener", "delay", cfg.ShutdownDrainDelay.String())
+		time.Sleep(cfg.ShutdownDrainDelay)
 	}
 
 	// A fresh context: ctx is already cancelled, but the shutdown itself needs time.

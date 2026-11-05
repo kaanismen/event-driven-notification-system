@@ -19,6 +19,8 @@ type Config struct {
 	DBMaxConns      int
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
+	// ShutdownDrainDelay is how long readiness fails before the HTTP listener closes.
+	ShutdownDrainDelay time.Duration
 	// MaxAttempts is the delivery budget copied into each new notification (ADR-0002).
 	MaxAttempts int
 
@@ -66,6 +68,8 @@ func Load(getenv func(string) string) (Config, error) {
 		DatabaseURL:     p.str("DATABASE_URL", ""),
 		DBMaxConns:      p.integer("DB_MAX_CONNS", 20, 2, 500),
 		ShutdownTimeout: p.duration("SHUTDOWN_TIMEOUT", 15*time.Second),
+		// Long enough for a load balancer polling every second or two to notice.
+		ShutdownDrainDelay: p.durationOrZero("SHUTDOWN_DRAIN_DELAY", 2*time.Second),
 		// The upper bound keeps a typo such as 1000 from turning a dead provider into
 		// hours of retries per message.
 		MaxAttempts:     p.integer("MAX_ATTEMPTS", 8, 1, 20),
@@ -152,6 +156,24 @@ func (p *parser) duration(name string, fallback time.Duration) time.Duration {
 		p.fail("%s: %w", name, err)
 	case d <= 0:
 		p.fail("%s: must be positive, got %s", name, d)
+	default:
+		return d
+	}
+	return fallback
+}
+
+// durationOrZero is duration that also accepts 0, for settings where 0 means "off".
+func (p *parser) durationOrZero(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(p.getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	switch {
+	case err != nil:
+		p.fail("%s: %w", name, err)
+	case d < 0:
+		p.fail("%s: must not be negative, got %s", name, d)
 	default:
 		return d
 	}

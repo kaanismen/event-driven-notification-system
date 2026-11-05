@@ -10,6 +10,7 @@ services:
       HTTP_ADDR: ":8080"
       LOG_LEVEL: ${LOG_LEVEL:-info}
       SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-15s}
+      SHUTDOWN_DRAIN_DELAY: ${SHUTDOWN_DRAIN_DELAY:-2s}
       MAX_ATTEMPTS: ${MAX_ATTEMPTS:-8}
       DB_MAX_CONNS: ${DB_MAX_CONNS:-20}
       # Defaults to the bundled mock provider, so the stack works without a webhook.site
@@ -34,7 +35,8 @@ services:
       mockprovider:
         condition: service_started
     restart: unless-stopped
-    # Longer than SHUTDOWN_TIMEOUT, so Docker does not kill the app mid-drain.
+    # Longer than SHUTDOWN_DRAIN_DELAY plus SHUTDOWN_TIMEOUT, so Docker does not kill
+    # the app mid-drain.
     stop_grace_period: 20s
 
   postgres:

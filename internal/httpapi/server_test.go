@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +19,7 @@ import (
 func newTestHandler(t *testing.T) (http.Handler, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
-	return NewHandler(logging.New(&logs, slog.LevelDebug), &fakeStore{}, 8), &logs
+	return NewHandler(testDeps(logging.New(&logs, slog.LevelDebug), &fakeStore{})), &logs
 }
 
 func TestHealth(t *testing.T) {
@@ -111,5 +113,88 @@ func TestRecoverPanicReturns500AndLogs(t *testing.T) {
 	out := logs.String()
 	if !strings.Contains(out, `"msg":"panic in handler"`) || !strings.Contains(out, `"status":500`) {
 		t.Errorf("logs missing panic or 500 access line:\n%s", out)
+	}
+}
+
+// testDeps returns handler dependencies with an always-ready check and a stub metrics
+// endpoint; tests override fields as needed.
+func testDeps(logger *slog.Logger, st Store) Deps {
+	return Deps{
+		Logger:      logger,
+		Store:       st,
+		MaxAttempts: 8,
+		Ready:       func(context.Context) error { return nil },
+		Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("stub_metric 1\n"))
+		}),
+	}
+}
+
+func TestLivenessAndHealthAlias(t *testing.T) {
+	h, logs := newTestHandler(t)
+	for _, path := range []string{"/livez", "/health"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok"`) {
+			t.Errorf("GET %s = %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	// Probes are frequent, so a successful one is logged at DEBUG, not INFO.
+	if !strings.Contains(logs.String(), `"level":"DEBUG","msg":"http request"`) ||
+		strings.Contains(logs.String(), `"level":"INFO","msg":"http request"`) {
+		t.Errorf("probe requests should be logged at DEBUG only:\n%s", logs.String())
+	}
+}
+
+func TestReadiness(t *testing.T) {
+	var logs bytes.Buffer
+	readyErr := errors.New("shutting down")
+	var current error
+	d := testDeps(logging.New(&logs, slog.LevelDebug), &fakeStore{})
+	d.Ready = func(ctx context.Context) error {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("readiness check has no deadline")
+		}
+		return current
+	}
+	h := NewHandler(d)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("ready: status %d, want 200", rec.Code)
+	}
+
+	current = readyErr
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "shutting down") {
+		t.Errorf("not ready: %d %s, want 503 with the reason", rec.Code, rec.Body.String())
+	}
+	// Liveness is unaffected by readiness.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("livez while not ready: %d, want 200", rec.Code)
+	}
+}
+
+func TestMetricsRoute(t *testing.T) {
+	h, _ := newTestHandler(t)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "stub_metric 1\n" {
+		t.Errorf("GET /metrics = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// The access log names the matched route, so lines group by endpoint rather than by
+// paths full of IDs.
+func TestAccessLogRecordsTheRoute(t *testing.T) {
+	h, logs := newTestHandler(t)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/notifications/"+uuid.NewString(), nil))
+	if !strings.Contains(logs.String(), `"route":"GET /v1/notifications/{id}"`) {
+		t.Errorf("access log lacks the route pattern:\n%s", logs.String())
 	}
 }
