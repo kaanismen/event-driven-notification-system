@@ -11,6 +11,7 @@ import (
 	"github.com/kaanismen/event-driven-notification-system/internal/logging"
 	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 	"github.com/kaanismen/event-driven-notification-system/internal/store"
+	"github.com/kaanismen/event-driven-notification-system/internal/tracing"
 )
 
 const maxBatchItems = 1000
@@ -308,6 +309,8 @@ func (a *api) createParams(ctx context.Context, reqs []notification.Request, bat
 		// be found under the same ID as the API call that created it.
 		CorrelationID:  logging.RequestID(ctx),
 		IdempotencyKey: key,
+		// The delivery attempts link their traces to this request's span (ADR-0021).
+		TraceParent: tracing.TraceParent(ctx),
 	}
 	if key != "" {
 		kind := "notification"

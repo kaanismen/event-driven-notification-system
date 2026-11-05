@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	// Aliased because this package already has a type named api.
 	openapi "github.com/kaanismen/event-driven-notification-system/api"
@@ -49,6 +51,8 @@ type Deps struct {
 	// Events delivers status changes to WebSocket subscribers (ADR-0020). It is the
 	// in-memory hub, not an interface: tests use a real hub and publish to it.
 	Events *events.Hub
+	// Tracer creates the request spans (ADR-0021); nil means tracing is off.
+	Tracer trace.Tracer
 }
 
 // api holds the dependencies shared by all handlers.
@@ -73,10 +77,17 @@ func NewHandler(d Deps) http.Handler {
 		mux.Handle(rt.pattern, rt.handler)
 	}
 
+	tracer := d.Tracer
+	if tracer == nil {
+		tracer = noop.NewTracerProvider().Tracer("")
+	}
+
 	// The first middleware listed runs first: the request ID must exist before anything
-	// logs, and recovery sits inside the access log so a panic is logged as a 500.
+	// logs, the span before the access log so its line carries the trace_id, and recovery
+	// sits inside the access log so a panic is logged as a 500.
 	return chain(mux,
 		requestID,
+		traceRequests(tracer),
 		accessLog(d.Logger),
 		recoverPanic(d.Logger),
 	)
