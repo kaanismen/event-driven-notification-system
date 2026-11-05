@@ -1,4 +1,4 @@
-// Command notifier runs the notification API (and, from Phase 3, the delivery workers).
+// Command notifier runs the notification API and the delivery workers in one process.
 package main
 
 import (
@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,7 +16,9 @@ import (
 	"github.com/kaanismen/insider-assessment/internal/config"
 	"github.com/kaanismen/insider-assessment/internal/httpapi"
 	"github.com/kaanismen/insider-assessment/internal/logging"
+	"github.com/kaanismen/insider-assessment/internal/provider"
 	"github.com/kaanismen/insider-assessment/internal/store"
+	"github.com/kaanismen/insider-assessment/internal/worker"
 )
 
 func main() {
@@ -49,9 +52,24 @@ func run() error {
 		return err
 	}
 
+	st := store.New(pool)
+
+	// The engine stops on a shutdown signal or when run returns for any other reason
+	// (deferred stopEngine), for example because the HTTP server failed to start.
+	engineCtx, stopEngine := context.WithCancel(ctx)
+	defer stopEngine()
+	engine := worker.New(st, provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout), logger, cfg.Worker)
+	engineDone := make(chan struct{})
+	go func() {
+		engine.Run(engineCtx)
+		close(engineDone)
+	}()
+	// Only the host is logged: the full webhook.site URL works like a password.
+	logger.Info("delivery engine started", "provider_host", hostOf(cfg.ProviderURL))
+
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,
-		Handler: httpapi.NewHandler(logger, store.New(pool), cfg.MaxAttempts),
+		Handler: httpapi.NewHandler(logger, st, cfg.MaxAttempts),
 		// Explicit timeouts: the zero values mean "wait forever", which lets slow or idle
 		// clients hold connections open indefinitely.
 		ReadHeaderTimeout: 5 * time.Second,
@@ -72,6 +90,8 @@ func run() error {
 	select {
 	case err := <-serveErr:
 		// The server stopped on its own (for example, the port is taken).
+		stopEngine()
+		<-engineDone
 		return fmt.Errorf("http server: %w", err)
 	case <-ctx.Done():
 		logger.Info("shutdown signal received", "timeout", cfg.ShutdownTimeout.String())
@@ -81,13 +101,30 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 
-	// Shutdown stops accepting connections and waits for in-flight requests to finish.
+	// The engine already stopped claiming when ctx was cancelled. Shutdown stops accepting
+	// connections and waits for in-flight requests to finish.
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("graceful shutdown: %w", err)
 	}
 	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("http server: %w", err)
 	}
+
+	// Wait for in-flight sends to record their results before the deferred pool.Close.
+	select {
+	case <-engineDone:
+	case <-shutdownCtx.Done():
+		logger.Warn("delivery engine did not stop within the shutdown timeout")
+		return errors.New("graceful shutdown: delivery engine did not stop in time")
+	}
 	logger.Info("shutdown complete")
 	return nil
+}
+
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "invalid"
+	}
+	return u.Host
 }

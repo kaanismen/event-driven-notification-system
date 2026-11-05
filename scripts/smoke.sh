@@ -13,6 +13,7 @@ trap 'rm -f "$BODY_FILE" "$HEADER_FILE"' EXIT
 checks=0
 
 # check METHOD PATH WANT_STATUS [BODY] [extra curl args...]
+# WANT_STATUS may list alternatives, for example "200|409".
 check() {
 	local method="$1" path="$2" want="$3" body="${4:-}"
 	shift $(($# < 4 ? $# : 4))
@@ -23,7 +24,7 @@ check() {
 	fi
 	local got
 	got="$(curl "${args[@]}" "$@" "$BASE_URL$path")"
-	if [ "$got" != "$want" ]; then
+	if ! [[ "$got" =~ ^($want)$ ]]; then
 		echo "FAIL $method $path: got $got, want $want" >&2
 		cat "$BODY_FILE" >&2
 		exit 1
@@ -92,8 +93,15 @@ check POST /v1/batches 422 '{"notifications":[]}'
 check GET "/v1/batches/00000000-0000-0000-0000-000000000000" 404
 
 echo "== cancel"
-check POST "/v1/notifications/$id/cancel" 200
-check POST "/v1/notifications/$id/cancel" 200
+# Workers deliver within a fraction of a second, so by now the notification may already be
+# sent. Both outcomes are correct (ADR-0007): 200 cancelled, or 409 with the current status.
+check POST "/v1/notifications/$id/cancel" "200|409"
+first_cancel="$(field status)$(field currentStatus)"
+check POST "/v1/notifications/$id/cancel" "200|409"
+if [ "$(field status)$(field currentStatus)" != "$first_cancel" ]; then
+	echo "FAIL repeated cancel gave a different answer" >&2
+	exit 1
+fi
 check POST "/v1/notifications/00000000-0000-0000-0000-000000000000/cancel" 404
 
 echo "== list"
@@ -109,5 +117,26 @@ check GET "/v1/notifications?from=2026-01-01T00:00:00Z&to=2099-01-01T00:00:00Z" 
 check GET "/v1/notifications?stauts=failed" 400
 check GET "/v1/notifications?limit=500" 400
 check GET "/v1/notifications/not-a-uuid" 400
+
+echo "== delivery"
+check POST /v1/notifications 202 "$push"
+delivered="$(field id)"
+for _ in $(seq 1 40); do
+	check GET "/v1/notifications/$delivered" 200 >/dev/null
+	case "$(field status)" in
+	sent) break ;;
+	failed)
+		echo "FAIL delivery failed: $(field lastError)" >&2
+		exit 1
+		;;
+	esac
+	sleep 0.25
+done
+if [ "$(field status)" != "sent" ]; then
+	echo "FAIL notification $delivered not sent within 10 s (status: $(field status))" >&2
+	exit 1
+fi
+printf "ok   delivered %s (providerMessageId: %s)
+" "$delivered" "$(field providerMessageId)"
 
 echo "all $checks checks passed against $BASE_URL"
