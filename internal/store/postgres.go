@@ -13,12 +13,17 @@ import (
 // instead of failing with a clear error.
 const connectTimeout = 10 * time.Second
 
-// Open creates a connection pool and verifies that the database answers.
-func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
+// Open creates a connection pool of at most maxConns connections (0 keeps the pgx
+// default) and verifies that the database answers.
+func Open(ctx context.Context, databaseURL string, maxConns int) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		// Do not wrap err: pgx includes the full connection string, password and all.
 		return nil, fmt.Errorf("parse DATABASE_URL: invalid connection string")
+	}
+
+	if maxConns > 0 {
+		cfg.MaxConns = int32(min(maxConns, 1000)) //nolint:gosec // bounded above, cannot overflow
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)

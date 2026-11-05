@@ -38,7 +38,7 @@ func TestMigrateURL(t *testing.T) {
 }
 
 func TestOpenDoesNotLeakPassword(t *testing.T) {
-	_, err := Open(context.Background(), "postgres://app:secret@db:notaport/x")
+	_, err := Open(context.Background(), "postgres://app:secret@db:notaport/x", 0)
 	if err == nil {
 		t.Fatal("Open succeeded, want error")
 	}
@@ -62,7 +62,7 @@ func TestMigrationsUpDownUp(t *testing.T) {
 		t.Fatalf("second Migrate: %v", err)
 	}
 
-	pool, err := Open(ctx, dbURL)
+	pool, err := Open(ctx, dbURL, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -39,7 +39,7 @@ func run() error {
 	}
 	logger := logging.New(os.Stdout, cfg.LogLevel)
 
-	pool, err := store.Open(ctx, cfg.DatabaseURL)
+	pool, err := store.Open(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
 		return err
 	}

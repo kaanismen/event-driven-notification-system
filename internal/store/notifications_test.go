@@ -21,7 +21,7 @@ func newTestStore(t *testing.T) *Store {
 	if err := Migrate(dbURL, discardLogger()); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	pool, err := Open(context.Background(), dbURL)
+	pool, err := Open(context.Background(), dbURL, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
