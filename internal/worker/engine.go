@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
 
 	"github.com/kaanismen/event-driven-notification-system/internal/config"
@@ -17,6 +20,7 @@ import (
 	"github.com/kaanismen/event-driven-notification-system/internal/notification"
 	"github.com/kaanismen/event-driven-notification-system/internal/provider"
 	"github.com/kaanismen/event-driven-notification-system/internal/store"
+	"github.com/kaanismen/event-driven-notification-system/internal/tracing"
 )
 
 // Store is the part of the store the engine needs; tests pass an in-memory fake.
@@ -53,14 +57,57 @@ type Engine struct {
 	// what the engine controls, instead of only on arrival times at a mock provider,
 	// which also include goroutine scheduling and network jitter (ADR-0003).
 	sendStarted func(ch notification.Channel, at time.Time)
+
+	tracer trace.Tracer
 }
 
-// New returns an engine; call Run to start it.
-func New(st Store, sender Sender, logger *slog.Logger, m *metrics.Metrics, cfg config.Worker) *Engine {
+// New returns an engine; call Run to start it. tracer creates one trace per delivery
+// attempt (ADR-0021); pass a no-op tracer to turn tracing off.
+func New(st Store, sender Sender, logger *slog.Logger, m *metrics.Metrics, cfg config.Worker, tracer trace.Tracer) *Engine {
 	return &Engine{
 		store: st, sender: sender, logger: logger.With("component", "worker"), metrics: m, cfg: cfg,
 		backoff: newBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay),
+		tracer:  tracer,
 	}
+}
+
+// Outcomes of one delivery attempt, recorded on its span.
+const (
+	spanSent     = "sent"
+	spanRetry    = "retry"
+	spanFailed   = "failed"
+	spanReleased = "released"
+	spanUnknown  = "not recorded" // the result could not be written (lease lost, database error)
+)
+
+// startDelivery starts the root span of one delivery attempt. It is a new trace, linked
+// to the API request that created the notification instead of being its child: an
+// attempt can run minutes or hours after the request (retries, scheduling), and a batch
+// request has up to 1000 of them, which would make that one trace huge and never-ending.
+// This is OpenTelemetry's recommended shape for messages taken from a queue.
+func (e *Engine) startDelivery(ctx context.Context, n notification.Notification) (context.Context, trace.Span) {
+	opts := []trace.SpanStartOption{
+		trace.WithNewRoot(),
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("notification.id", n.ID.String()),
+			attribute.String("notification.channel", string(n.Channel)),
+			attribute.String("notification.priority", string(n.Priority)),
+			attribute.Int("notification.attempt", n.Attempts),
+			// How long the row was due before a worker took it: the time spent queueing.
+			attribute.Int64("notification.queue_delay_ms", time.Since(n.NextAttemptAt).Milliseconds()),
+		),
+	}
+	if n.BatchID != nil {
+		opts = append(opts, trace.WithAttributes(attribute.String("notification.batch_id", n.BatchID.String())))
+	}
+	if sc := tracing.SpanContextOf(n.TraceParent); sc.IsValid() {
+		opts = append(opts, trace.WithLinks(trace.Link{
+			SpanContext: sc,
+			Attributes:  []attribute.KeyValue{attribute.String("link.reason", "created by this request")},
+		}))
+	}
+	return e.tracer.Start(ctx, "deliver "+string(n.Channel), opts...)
 }
 
 // Run delivers notifications until ctx is cancelled, then waits for in-flight sends to
@@ -192,12 +239,23 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 	ctx = logging.WithRequestID(ctx, n.CorrelationID)
 	logger = logger.With("notification_id", n.ID.String(), "attempt", n.Attempts)
 
-	admitted, err := limit.wait(ctx)
+	ctx, span := e.startDelivery(ctx, n)
+	outcome := spanUnknown
+	defer func() {
+		span.SetAttributes(attribute.String("notification.outcome", outcome))
+		span.End()
+	}()
+
+	waitCtx, waitSpan := e.tracer.Start(ctx, "rate limit wait")
+	admitted, err := limit.wait(waitCtx)
+	waitSpan.End()
 	if err != nil {
 		// Shutting down before this row got a rate slot: it was never sent.
 		if j.probe {
 			brk.abortProbe()
 		}
+		outcome = spanReleased
+		span.SetAttributes(attribute.String("notification.release_reason", metrics.ReleaseShutdown))
 		e.release(ctx, logger, n, metrics.ReleaseShutdown)
 		return
 	}
@@ -205,6 +263,8 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 		// The breaker opened while this row waited for its rate slot. Hand it back with
 		// its attempt rather than send it into the outage.
 		logger.DebugContext(ctx, "circuit breaker open: row handed back unsent")
+		outcome = spanReleased
+		span.SetAttributes(attribute.String("notification.release_reason", metrics.ReleaseBreaker))
 		e.release(ctx, logger, n, metrics.ReleaseBreaker)
 		return
 	}
@@ -217,20 +277,32 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 	// The provider timeout and resultWriteTimeout bound how long this takes.
 	keep := context.WithoutCancel(ctx)
 
+	sendCtx, sendSpan := e.tracer.Start(keep, "provider call", trace.WithSpanKind(trace.SpanKindClient))
 	start := time.Now()
-	res, sendErr := e.sender.Send(keep, provider.Message{
+	res, sendErr := e.sender.Send(sendCtx, provider.Message{
 		ID: n.ID, Channel: n.Channel, Recipient: n.Recipient, Content: n.Content, CorrelationID: n.CorrelationID,
 	})
 	elapsed := time.Since(start)
 	transient := sendErr != nil && provider.Retryable(sendErr)
 	brk.record(j.probe, transient)
-	e.metrics.ProviderCall(n.Channel, callResult(sendErr, transient), elapsed)
+	result := callResult(sendErr, transient)
+	e.metrics.ProviderCall(n.Channel, result, elapsed)
+	sendSpan.SetAttributes(attribute.String("provider.result", result))
+	if sendErr != nil {
+		sendSpan.SetStatus(codes.Error, sendErr.Error())
+	}
+	sendSpan.End()
 
 	writeCtx, cancel := context.WithTimeout(keep, resultWriteTimeout)
 	defer cancel()
+	writeCtx, writeSpan := e.tracer.Start(writeCtx, "record result")
+	defer writeSpan.End()
 
 	if sendErr != nil {
-		e.recordFailure(writeCtx, logger, n, sendErr, elapsed)
+		outcome = e.recordFailure(writeCtx, logger, n, sendErr, elapsed)
+		if outcome == spanFailed {
+			span.SetStatus(codes.Error, sendErr.Error())
+		}
 		return
 	}
 
@@ -244,6 +316,7 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 	case !owned:
 		logger.WarnContext(ctx, "delivery not recorded: row no longer owned by this worker")
 	default:
+		outcome = spanSent
 		e.metrics.Delivery(n.Channel, metrics.OutcomeSent)
 		e.metrics.Delivered(n.Channel, latency)
 		logger.InfoContext(ctx, "notification sent",
@@ -255,8 +328,9 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 // everything else (ADR-0002). A retry is a row back in the queue with a later due time,
 // not a sleep in this goroutine: the sender is free at once, the retry survives a
 // restart, and it passes the channel's rate limiter like any first attempt (DR-06).
-// ctx bounds the database update and carries the request ID for the log lines.
-func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, n notification.Notification, sendErr error, elapsed time.Duration) {
+// ctx bounds the database update and carries the request ID for the log lines. It
+// returns the outcome for the delivery span.
+func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, n notification.Notification, sendErr error, elapsed time.Duration) string {
 	reason := sendErr.Error()
 	attrs := []any{"error", reason, "duration_ms", elapsed.Milliseconds()}
 
@@ -272,8 +346,9 @@ func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, n notif
 			e.metrics.Delivery(n.Channel, metrics.OutcomeRetry)
 			logger.WarnContext(ctx, "delivery failed, will retry",
 				append(attrs, "retry_in_ms", delay.Milliseconds(), "max_attempts", n.MaxAttempts)...)
+			return spanRetry
 		}
-		return
+		return spanUnknown
 	}
 
 	why := "permanent error"
@@ -289,7 +364,9 @@ func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, n notif
 	default:
 		e.metrics.Delivery(n.Channel, metrics.OutcomeFailed)
 		logger.ErrorContext(ctx, "delivery failed for good", append(attrs, "reason", why)...)
+		return spanFailed
 	}
+	return spanUnknown
 }
 
 // release hands an unsent row back to the queue, at shutdown or when the breaker is

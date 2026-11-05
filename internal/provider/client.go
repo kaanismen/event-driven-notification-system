@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/kaanismen/event-driven-notification-system/internal/notification"
+	"github.com/kaanismen/event-driven-notification-system/internal/tracing"
 )
 
 // Message is one delivery attempt.
@@ -105,6 +107,9 @@ func (c *Client) Send(ctx context.Context, m Message) (Result, error) {
 	if m.CorrelationID != "" {
 		req.Header.Set("X-Request-ID", m.CorrelationID)
 	}
+	// W3C traceparent of the delivery span, so a provider that traces can continue the
+	// trace (ADR-0021). Nothing is written when ctx carries no recorded span.
+	tracing.Inject(ctx, propagation.HeaderCarrier(req.Header))
 
 	resp, err := c.http.Do(req)
 	if err != nil {

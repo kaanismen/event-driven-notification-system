@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel/trace/noop"
+
 	"github.com/kaanismen/event-driven-notification-system/internal/config"
 	"github.com/kaanismen/event-driven-notification-system/internal/events"
 	"github.com/kaanismen/event-driven-notification-system/internal/httpapi"
@@ -63,7 +65,7 @@ func run() error {
 	// (deferred stopEngine), for example because the HTTP server failed to start.
 	engineCtx, stopEngine := context.WithCancel(ctx)
 	defer stopEngine()
-	engine := worker.New(st, provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout), logger, m, cfg.Worker)
+	engine := worker.New(st, provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout), logger, m, cfg.Worker, noop.NewTracerProvider().Tracer(""))
 	engineDone := make(chan struct{})
 	go func() {
 		engine.Run(engineCtx)

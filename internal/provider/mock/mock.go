@@ -48,6 +48,7 @@ type Request struct {
 	Content        string
 	IdempotencyKey string
 	RequestID      string
+	TraceParent    string // W3C trace context the client sent, if any (ADR-0021)
 	MessageID      string // the ID the mock answered with
 }
 
@@ -108,6 +109,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Content:        body.Content,
 		IdempotencyKey: r.Header.Get("Idempotency-Key"),
 		RequestID:      r.Header.Get("X-Request-ID"),
+		TraceParent:    r.Header.Get("traceparent"),
 	}
 
 	s.mu.Lock()
@@ -149,7 +151,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("message accepted",
 		"channel", req.Channel, "message_id", req.MessageID,
-		"idempotency_key", req.IdempotencyKey, "request_id", req.RequestID)
+		"idempotency_key", req.IdempotencyKey, "request_id", req.RequestID,
+		"traceparent", req.TraceParent)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)

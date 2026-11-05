@@ -243,7 +243,7 @@ func TestRateLimitPerChannel(t *testing.T) {
 	srv := httptest.NewServer(m)
 	defer srv.Close()
 
-	e := New(f, provider.NewClient(srv.URL, 5*time.Second), slog.New(slog.DiscardHandler), metrics.New(), testConfig())
+	e := New(f, provider.NewClient(srv.URL, 5*time.Second), slog.New(slog.DiscardHandler), metrics.New(), testConfig(), noTracer)
 	starts := newStartTimes()
 	e.sendStarted = starts.record
 	elapsed := runUntilDone(t, e, f, 15*time.Second)
@@ -288,7 +288,7 @@ func TestDeliveryRecordsResultsAndCarriesTheRequestID(t *testing.T) {
 
 	var logs safeBuffer
 	f := newFakeStore(rows)
-	e := New(f, provider.NewClient(srv.URL, 5*time.Second), logging.New(&logs, slog.LevelInfo), metrics.New(), testConfig())
+	e := New(f, provider.NewClient(srv.URL, 5*time.Second), logging.New(&logs, slog.LevelInfo), metrics.New(), testConfig(), noTracer)
 	runUntilDone(t, e, f, 5*time.Second)
 
 	if len(f.sent) != 2 || len(f.failed) != 2 {
@@ -349,7 +349,7 @@ func TestRetryDecisions(t *testing.T) {
 
 	f := newFakeStore(rows)
 	m := metrics.New()
-	e := New(f, provider.NewClient(srv.URL, time.Second), slog.New(slog.DiscardHandler), m, testConfig())
+	e := New(f, provider.NewClient(srv.URL, time.Second), slog.New(slog.DiscardHandler), m, testConfig(), noTracer)
 	runUntilDone(t, e, f, 5*time.Second)
 
 	// OBS-02: the counters match what happened. recovers: 2 retries then sent; permanent:
@@ -398,7 +398,7 @@ func TestShutdownFinishesInFlightSends(t *testing.T) {
 
 	rows := rowsFor(notification.ChannelEmail, 1)
 	f := newFakeStore(rows)
-	e := New(f, provider.NewClient(srv.URL, 5*time.Second), slog.New(slog.DiscardHandler), metrics.New(), testConfig())
+	e := New(f, provider.NewClient(srv.URL, 5*time.Second), slog.New(slog.DiscardHandler), metrics.New(), testConfig(), noTracer)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
@@ -424,7 +424,7 @@ func TestShutdownFinishesInFlightSends(t *testing.T) {
 
 func TestIdleEngineStopsPromptly(t *testing.T) {
 	f := newFakeStore(nil)
-	e := New(f, provider.NewClient("http://127.0.0.1:1", time.Second), slog.New(slog.DiscardHandler), metrics.New(), testConfig())
+	e := New(f, provider.NewClient("http://127.0.0.1:1", time.Second), slog.New(slog.DiscardHandler), metrics.New(), testConfig(), noTracer)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})

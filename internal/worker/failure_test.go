@@ -73,7 +73,7 @@ func startEngine(t *testing.T, st *store.Store, opts mock.Options, cfg config.Wo
 func startEngineWith(t *testing.T, st *store.Store, h http.Handler, cfg config.Worker, providerTimeout time.Duration, setup ...func(*Engine)) func() {
 	t.Helper()
 	srv := httptest.NewServer(h)
-	e := New(st, provider.NewClient(srv.URL, providerTimeout), slog.New(slog.DiscardHandler), metrics.New(), cfg)
+	e := New(st, provider.NewClient(srv.URL, providerTimeout), slog.New(slog.DiscardHandler), metrics.New(), cfg, noTracer)
 	for _, f := range setup {
 		f(e)
 	}
