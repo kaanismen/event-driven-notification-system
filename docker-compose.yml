@@ -27,6 +27,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      mockprovider:
+        condition: service_started
     restart: unless-stopped
     # Longer than SHUTDOWN_TIMEOUT, so Docker does not kill the app mid-drain.
     stop_grace_period: 20s
@@ -50,6 +52,17 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+
+  # Stand-in delivery provider (ADR-0013): answers 202 with a unique messageId and logs
+  # each request. The default PROVIDER_URL points here; `docker compose logs mockprovider`
+  # shows what the workers sent.
+  mockprovider:
+    build: .
+    entrypoint: ["/mockprovider"]
+    environment:
+      MOCK_ADDR: ":8081"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    restart: unless-stopped
 
   # Throwaway server for integration tests (ADR-0010). Started only by `make test`
   # through the "test" profile, so `docker compose up` never runs it.

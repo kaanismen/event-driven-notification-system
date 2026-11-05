@@ -9,12 +9,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-# CGO off gives a static binary that runs on the minimal runtime image below.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/notifier ./cmd/notifier
+# CGO off gives static binaries that run on the minimal runtime image below. Both commands
+# (the app and the mock provider) are built into one image.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ ./cmd/...
 
 # Runtime stage: no shell or package manager, runs as an unprivileged user.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/notifier /notifier
+COPY --from=build /out/mockprovider /mockprovider
 EXPOSE 8080
 USER nonroot:nonroot
 # Exec form makes the binary PID 1, so it receives SIGTERM from `docker stop` directly.
