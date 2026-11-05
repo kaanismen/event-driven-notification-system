@@ -43,6 +43,10 @@ test-db-up: ## Start the disposable test database and wait until it is healthy
 test-db-down: ## Stop and remove the test database
 	docker compose --profile test rm -sf postgres-test
 
+.PHONY: smoke
+smoke: ## Call every API endpoint against the running stack (run make up first)
+	bash scripts/smoke.sh
+
 .PHONY: lint
 lint: ## Run golangci-lint (includes go vet and gofmt/goimports checks)
 	golangci-lint run ./...
