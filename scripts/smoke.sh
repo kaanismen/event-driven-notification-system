@@ -61,6 +61,15 @@ for _ in $(seq 1 30); do
 done
 check GET /health 200
 require_header "X-Request-Id: $RUN_ID"
+check GET /livez 200
+check GET /readyz 200
+check GET /metrics 200
+if ! grep -q '^notifier_queue_depth' "$BODY_FILE"; then
+	echo "FAIL /metrics has no notifier_queue_depth series" >&2
+	exit 1
+fi
+check GET /openapi.yaml 200
+require_header "Content-Type: application/yaml"
 
 echo "== create"
 check POST /v1/notifications 202 "$sms"
