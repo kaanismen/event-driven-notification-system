@@ -39,7 +39,11 @@ func NewHandler(logger *slog.Logger, st Store, maxAttempts int) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("POST /v1/notifications", a.createNotification)
+	mux.HandleFunc("GET /v1/notifications", a.listNotifications)
+	mux.HandleFunc("GET /v1/notifications/{id}", a.getNotification)
+	mux.HandleFunc("POST /v1/notifications/{id}/cancel", a.cancelNotification)
 	mux.HandleFunc("POST /v1/batches", a.createBatch)
+	mux.HandleFunc("GET /v1/batches/{id}", a.getBatch)
 
 	// The first middleware listed runs first: the request ID must exist before anything
 	// logs, and recovery sits inside the access log so a panic is logged as a 500.

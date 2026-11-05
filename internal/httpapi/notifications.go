@@ -206,3 +206,102 @@ func createdStatus(w http.ResponseWriter, res store.CreateResult) int {
 	}
 	return http.StatusAccepted
 }
+
+// getNotification handles GET /v1/notifications/{id}.
+func (a *api) getNotification(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	n, err := a.store.Get(r.Context(), id)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toResponse(n))
+}
+
+type batchStatusResponse struct {
+	BatchID string `json:"batchId"`
+	Total   int    `json:"total"`
+	// Counts has every status, zeros included, so clients need no special cases.
+	Counts        map[notification.Status]int `json:"counts"`
+	Notifications []notificationResponse      `json:"notifications"`
+}
+
+// getBatch handles GET /v1/batches/{id}: a summary per status plus every item (A-11).
+func (a *api) getBatch(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	items, err := a.store.GetBatch(r.Context(), id)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+
+	resp := batchStatusResponse{
+		BatchID:       id.String(),
+		Total:         len(items),
+		Counts:        make(map[notification.Status]int),
+		Notifications: make([]notificationResponse, len(items)),
+	}
+	for _, s := range notification.Statuses() {
+		resp.Counts[s] = 0
+	}
+	// A batch has at most 1000 items, so counting here is cheaper than a second query.
+	for i, n := range items {
+		resp.Counts[n.Status]++
+		resp.Notifications[i] = toResponse(n)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// cancelNotification handles POST /v1/notifications/{id}/cancel (ADR-0007).
+func (a *api) cancelNotification(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	n, err := a.store.Cancel(r.Context(), id)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toResponse(n))
+}
+
+type listResponse struct {
+	Items []notificationResponse `json:"items"`
+	// NextCursor is null on the last page. There is no total count (ADR-0012).
+	NextCursor *string `json:"nextCursor"`
+}
+
+// listNotifications handles GET /v1/notifications.
+func (a *api) listNotifications(w http.ResponseWriter, r *http.Request) {
+	filter, err := parseListQuery(r.URL.Query())
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	page, err := a.store.List(r.Context(), filter)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+
+	// make, not a nil slice, so an empty page is "items": [] rather than null.
+	resp := listResponse{Items: make([]notificationResponse, len(page.Items))}
+	for i, n := range page.Items {
+		resp.Items[i] = toResponse(n)
+	}
+	if page.Next != nil {
+		c := encodeCursor(*page.Next)
+		resp.NextCursor = &c
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
