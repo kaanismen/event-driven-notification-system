@@ -35,6 +35,10 @@ an open design decision point to the ADR.
 | A-15 | Authentication and multi-tenancy | Out of scope. Idempotency keys are therefore global, not per client. | Not mentioned in the brief; keeps the scope inside the time budget. | Accepted |
 | A-16 | How long idempotency keys live | Kept as long as the row exists. Production would expire them (for example after 24 hours). | Simplest correct behavior for the assessment. | Accepted |
 | A-17 | "Real-time status tracking" | Clients poll the status endpoints. WebSocket push is an optional bonus and not planned. | Polling meets the requirement with no extra moving parts. | Accepted |
+| A-26 | Request body size limits | 64 KiB for a single notification, 12 MiB for a batch. 1000 maximum-length emails in plain ASCII fit; a batch of long multi-byte content can exceed the limit, gets `413`, and must be split. | Bounds memory per request without rejecting realistic batches. | Proposed |
+| A-27 | Format of notification and batch IDs | UUIDv7: random, but starting with a millisecond timestamp. Batch items therefore read back in request order, and primary-key inserts stay local in the index. The creation time is visible in the ID. | Ordered IDs without a separate sequence column; creation time is not secret here. | Proposed |
+| A-28 | Pagination consistency | Rows are ordered by `created_at` (the inserting transaction's start time) and ID. A row whose transaction commits after a reader has passed its position is not shown on that walk. Our insert transactions take milliseconds, so the window is tiny. | Keyset pagination without a global sequence; the trade-off is documented rather than hidden. | Proposed |
+| A-29 | Allowed `Idempotency-Key` values | 1-255 printable ASCII characters, not only spaces. Other values return `400`. | Keys end up in logs and indexes; UUIDs and typical client keys fit. | Proposed |
 
 ## Processing and scale
 

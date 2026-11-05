@@ -19,14 +19,14 @@ will write. Status is updated at the end of each phase.
 
 | ID | Requirement (paraphrased) | Phase | Test | Evidence | Status |
 |----|---------------------------|-------|------|----------|--------|
-| API-01 | Accept a single notification with recipient, channel, content and priority | 2 | H, I | Valid request returns 202 with an ID; row is stored as `pending` | Planned |
-| API-02 | Accept a batch of up to 1000 notifications in one request | 2 | H, I | 1000 items accepted; 0 and 1001 items rejected; invalid item handling per ADR-0006 | Planned |
-| API-03 | Return the status of a notification by its ID | 2 | H, I | Known ID returns current state; unknown ID 404; malformed ID 400 | Planned |
-| API-04 | Return the status of all notifications in a batch by batch ID | 2 | H, I | Summary counts per status plus items; unknown batch 404 | Planned |
-| API-05 | Cancel a notification that has not been sent yet | 2, 3 | H, I | `pending` becomes `cancelled`; other states return 409; a worker never sends a cancelled row (race test) | Planned |
-| API-06 | List notifications filtered by status, channel and creation date range | 2 | I | Each filter alone and combined returns exactly the matching rows | Planned |
-| API-07 | Paginate the list endpoint | 2 | I | Walking all pages returns every row once, in a stable order, even with concurrent inserts | Planned |
-| API-08 | Let clients retry create requests safely (idempotency key at the API) | 2 | H, I | Same key + same body returns the original; same key + different body 409; concurrent duplicates create one row | Planned |
+| API-01 | Accept a single notification with recipient, channel, content and priority | 2 | H, I | Valid request returns 202 with an ID; row is stored as `pending` | Done |
+| API-02 | Accept a batch of up to 1000 notifications in one request | 2 | H, I | 1000 items accepted; 0 and 1001 items rejected; invalid item handling per ADR-0006 | Done |
+| API-03 | Return the status of a notification by its ID | 2 | H, I | Known ID returns current state; unknown ID 404; malformed ID 400 | Done |
+| API-04 | Return the status of all notifications in a batch by batch ID | 2 | H, I | Summary counts per status plus items; unknown batch 404 | Done |
+| API-05 | Cancel a notification that has not been sent yet | 2, 3 | H, I | `pending` becomes `cancelled`; other states return 409; a worker never sends a cancelled row (race test) | Phase 2 part done |
+| API-06 | List notifications filtered by status, channel and creation date range | 2 | I | Each filter alone and combined returns exactly the matching rows | Done |
+| API-07 | Paginate the list endpoint | 2 | I | Walking all pages returns every row once, in a stable order, even with concurrent inserts | Done |
+| API-08 | Let clients retry create requests safely (idempotency key at the API) | 2 | H, I | Same key + same body returns the original; same key + different body 409; concurrent duplicates create one row | Done |
 
 ## 2. Processing engine
 
@@ -35,8 +35,8 @@ will write. Status is updated at the end of each phase.
 | PE-01 | Deliver notifications asynchronously through queue workers, decoupled from the API | 3 | I, E | API returns before delivery; worker moves the row to `sent` | Planned |
 | PE-02 | Never send more than 100 messages per second on any single channel | 3, 4 | U, F | Mock provider records timestamps; no 1-second window exceeds the limit per channel, retries included | Planned |
 | PE-03 | Support three priorities (high, normal, low) | 3 | I | With a backlog, claim order follows the policy in ADR-0008 | Planned |
-| PE-04 | Validate content before accepting it (required fields, per-channel length limits) | 2 | U | Table-driven tests per channel: missing fields, too long, bad recipient format | Planned |
-| PE-05 | Prevent the same notification from being sent twice | 2, 3, 4 | I, F | Only the lease holder may complete a send; stale worker update is rejected; see ADR-0004 and ADR-0005 | Planned |
+| PE-04 | Validate content before accepting it (required fields, per-channel length limits) | 2 | U | Table-driven tests per channel: missing fields, too long, bad recipient format | Done |
+| PE-05 | Prevent the same notification from being sent twice | 2, 3, 4 | I, F | Only the lease holder may complete a send; stale worker update is rejected; see ADR-0004 and ADR-0005 | Phase 2 part done |
 | PE-06 | Track status transitions so clients see progress | 3 | U, I | Allowed transitions enforced; illegal ones rejected | Planned |
 
 ## 3. Delivery and retry logic (design left to the candidate)
@@ -70,7 +70,7 @@ will write. Status is updated at the end of each phase.
 | NFR-01 | Handle millions of notifications per day | 0, 5 | D, E | Capacity reasoning in ADR-0001; load script numbers in the README | Planned |
 | NFR-02 | Absorb traffic bursts without dropping requests | 3, 5 | E | Large batch is accepted quickly; queue drains at the rate limit | Planned |
 | NFR-03 | Reliable delivery (no silent loss) | 4 | I, F | At-least-once semantics per ADR-0005 | Planned |
-| NFR-04 | Status visible to API consumers and internal teams | 2, 5 | H, E | Status endpoints plus metrics and logs | Planned |
+| NFR-04 | Status visible to API consumers and internal teams | 2, 5 | H, E | Status endpoints plus metrics and logs | Phase 2 part done |
 | NFR-05 | Implemented in Go 1.2x | 1 | D | `go.mod` Go version | Done |
 
 ## 6. Deliverables
