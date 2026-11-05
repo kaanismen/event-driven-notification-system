@@ -47,6 +47,10 @@ test-db-down: ## Stop and remove the test database
 smoke: ## Call every API endpoint against the running stack (run make up first)
 	bash scripts/smoke.sh
 
+.PHONY: load
+load: ## Post batches of notifications and watch /metrics until the queue drains
+	bash scripts/load.sh
+
 .PHONY: lint
 lint: ## Run golangci-lint (includes go vet and gofmt/goimports checks)
 	golangci-lint run ./...
