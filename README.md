@@ -1,5 +1,19 @@
 # Event-Driven Notification System
 
+> **Reviewer tour.** A Go service that queues SMS, email and push notifications in PostgreSQL and
+> delivers them through an HTTP provider at up to 100 per second per channel.
+>
+> Run it: `make up`, then `make test` and `make smoke`.
+>
+> Read these five files in order:
+> 1. [internal/store/claim.go](internal/store/claim.go): claim and lease SQL (`FOR UPDATE SKIP LOCKED`, priority shares, ownership-guarded result writes).
+> 2. [internal/worker/engine.go](internal/worker/engine.go): the delivery loop: dispatcher, senders, retry decisions, result writes retried within the lease.
+> 3. [internal/worker/ratelimit.go](internal/worker/ratelimit.go): per-channel limit: a token bucket plus a cap that keeps any one-second window at 100.
+> 4. [internal/store/notifications.go](internal/store/notifications.go): idempotent create: key reservation, insert and replay in one transaction.
+> 5. [internal/httpapi/notifications.go](internal/httpapi/notifications.go): HTTP handlers: validation, all-or-nothing batches, replay and conflict responses.
+>
+> Optional extras: real-time status over WebSocket with the `cmd/watch` CLI, message templates, and OpenTelemetry tracing. Every decision is an ADR in [docs/adr/](docs/adr/).
+
 A notification service in Go that accepts SMS, email and push notifications over an HTTP API
 and delivers them asynchronously through an external provider. It is built for bursts:
 the API stores work and answers at once, while workers drain the queue at a fixed rate of 100
