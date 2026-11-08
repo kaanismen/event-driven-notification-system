@@ -47,6 +47,10 @@ make smoke                          # calls every endpoint and checks each respo
 notification then shows up on your webhook.site page. The URL acts like a password, so it lives
 only in `.env`, which git ignores.
 
+The Compose project, and with it the containers and the `<project>_pgdata` volume, is named
+after the checkout's directory, so two checkouts never share a database. Set
+`COMPOSE_PROJECT_NAME` in `.env` to pin the name.
+
 Useful commands (`make help` lists them all):
 
 | Command | What it does |
@@ -364,7 +368,7 @@ make test       # unit + integration tests; starts a throwaway Postgres on port 
 make test-unit  # unit tests only, no Docker (integration tests skip)
 ```
 
-The suite has about 220 tests and takes about 30 seconds. Integration tests run on a real
+The suite has over 300 tests, counting subtests (`make test TESTFLAGS=-v | grep -c -- '--- PASS'`), and takes about 30 seconds. Integration tests run on a real
 PostgreSQL, because the queue's correctness depends on its locking. Notable ones:
 
 - **Queue safety:** concurrent claims never hand out the same row; a worker with an expired lease

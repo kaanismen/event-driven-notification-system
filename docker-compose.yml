@@ -1,6 +1,7 @@
 # One command starts the whole stack: `docker compose up --build` (or `make up`).
 # Values in ${...} can be overridden in a local .env file; see .env.example.
-name: notifier
+# There is no top-level `name`: the project is named after the checkout's directory, so
+# two checkouts get separate containers and volumes. COMPOSE_PROJECT_NAME overrides it.
 
 services:
   app:
