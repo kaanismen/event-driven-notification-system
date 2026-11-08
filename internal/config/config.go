@@ -72,6 +72,9 @@ const (
 	// LeaseSafetyMargin is how long before a row's lease ends the worker stops retrying a
 	// failed result write, so its last update lands before another worker can reclaim it.
 	LeaseSafetyMargin = time.Second
+	// ResultWriteBudget is the part of the lease kept free after the slowest send: one full
+	// write attempt that still ends a safety margin before the lease does.
+	ResultWriteBudget = ResultWriteTimeout + LeaseSafetyMargin
 )
 
 // Load reads the configuration through getenv (os.Getenv in production, a map lookup in
@@ -134,14 +137,16 @@ func Load(getenv func(string) string) (Config, error) {
 		p.fail("RETRY_BASE_DELAY (%s) must not exceed RETRY_MAX_DELAY (%s)", r.RetryBaseDelay, r.RetryMaxDelay)
 	}
 
-	// A claimed row must not outlive its lease while it waits: in the worst case it waits
-	// for every row ahead of it (claim batch plus busy senders) to get a rate-limit token,
-	// then for one provider call. Otherwise another worker could claim it and send twice.
+	// A claimed row must not outlive its lease before its result is recorded: in the worst
+	// case it waits for every row ahead of it (claim batch plus busy senders) to get a
+	// rate-limit token, then for one provider call, then for the result write. Otherwise
+	// another worker could claim it and send twice.
 	w := cfg.Worker
 	if w.RatePerSecond > 0 {
 		queueWait := time.Duration(w.ClaimBatchSize+w.SendersPerChannel) * time.Second / time.Duration(w.RatePerSecond)
-		if minimum := cfg.ProviderTimeout + queueWait; w.Lease <= minimum {
-			p.fail("LEASE_DURATION (%s) must be longer than PROVIDER_TIMEOUT plus the worst rate-limit wait (%s)", w.Lease, minimum)
+		if minimum := cfg.ProviderTimeout + queueWait + ResultWriteBudget; w.Lease <= minimum {
+			p.fail("LEASE_DURATION (%s) must be longer than PROVIDER_TIMEOUT + worst rate-limit wait + result write budget = %s + %s + %s = %s",
+				w.Lease, cfg.ProviderTimeout, queueWait, ResultWriteBudget, minimum)
 		}
 	}
 

@@ -278,7 +278,7 @@ documents each one. The most important:
 | `MAX_ATTEMPTS` | `8` | Attempts before a notification is dead-lettered |
 | `RETRY_BASE_DELAY` / `RETRY_MAX_DELAY` | `2s` / `5m` | Backoff curve |
 | `BREAKER_FAILURE_THRESHOLD` / `BREAKER_COOLDOWN` | `10` / `30s` | Circuit breaker |
-| `LEASE_DURATION` | `30s` | How long a claimed row is reserved for one worker |
+| `LEASE_DURATION` | `30s` | How long a claimed row is reserved for one worker; must exceed `PROVIDER_TIMEOUT` + the worst rate-limit wait + 6 s for the result write |
 | `PRIORITY_WEIGHTS` | `70,20,10` | Shares of high, normal and low priority under backlog |
 | `MAX_SCHEDULE_AHEAD` | `720h` | How far ahead `scheduledAt` may be |
 | `SHUTDOWN_TIMEOUT` / `SHUTDOWN_DRAIN_DELAY` | `15s` / `2s` | Graceful shutdown |

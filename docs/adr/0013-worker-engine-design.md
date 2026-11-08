@@ -26,7 +26,8 @@ priority) fix what the engine must do. Three questions about how it does it were
 hand over a row only when a sender is free. It therefore never claims far ahead of what it can send:
 a claimed row waits at most for the rows ahead of it (claim batch plus busy senders) to get a rate
 slot, under a second with the defaults, against a 30 second lease. Config validation rejects a lease
-shorter than the provider timeout plus that worst-case wait.
+shorter than the provider timeout plus that worst-case wait plus the result-write budget (one 5 s
+write attempt and the 1 s safety margin, see the 2026-11-08 amendment of ADR-0005).
 
 ### 2. Noticing new work
 

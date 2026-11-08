@@ -144,3 +144,33 @@ func TestProviderURLIsNotEchoed(t *testing.T) {
 		t.Errorf("error must reject the URL without repeating it: %v", err)
 	}
 }
+
+// The lease must cover the slowest send and the result write that follows it, or a row
+// whose send was slow can be reclaimed and sent again while its result is being written.
+func TestLeaseCoversTheSendAndTheResultWrite(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		wantErr string
+	}{
+		{name: "defaults", env: nil},
+		{name: "room for the result write", env: map[string]string{"PROVIDER_TIMEOUT": "20s", "LEASE_DURATION": "30s"}},
+		{
+			// 25 s + 0.7 s fits in 30 s only if the result write is left out.
+			name:    "no room for the result write",
+			env:     map[string]string{"PROVIDER_TIMEOUT": "25s", "LEASE_DURATION": "30s"},
+			wantErr: "25s + 700ms + 6s = 31.7s",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(required(tt.env))
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("Load: %v", err)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Fatalf("err = %v, want it to show %q", err, tt.wantErr)
+			}
+		})
+	}
+}
