@@ -402,11 +402,16 @@ func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, j job, 
 func (e *Engine) writeResult(ctx context.Context, logger *slog.Logger, j job, op string, write func(context.Context) (bool, error)) (bool, error) {
 	giveUp := j.leaseEnd.Add(-config.LeaseSafetyMargin)
 	keep := context.WithoutCancel(ctx)
-	// The first attempt always gets a full timeout, even if the send took so long that the
-	// margin has already started: the ownership guard still makes a late write safe.
-	timeout := config.ResultWriteTimeout
 	for retries := 0; ; retries++ {
-		attemptCtx, cancel := context.WithTimeout(keep, timeout)
+		// The first attempt always gets a full timeout, even if the send took so long that
+		// the margin has already started: the ownership guard still makes a late write safe.
+		// A retry ends at giveUp at the latest. The deadline is absolute: a duration computed
+		// from an earlier clock reading would let it end a little after giveUp.
+		deadline := time.Now().Add(config.ResultWriteTimeout)
+		if retries > 0 && giveUp.Before(deadline) {
+			deadline = giveUp
+		}
+		attemptCtx, cancel := context.WithDeadline(keep, deadline)
 		owned, err := write(attemptCtx)
 		cancel()
 		if err == nil {
@@ -442,7 +447,6 @@ func (e *Engine) writeResult(ctx context.Context, logger *slog.Logger, j job, op
 			}
 			return false, fmt.Errorf("%s: gave up after %d retries, %s: %w", op, retries, why, err)
 		}
-		timeout = min(config.ResultWriteTimeout, time.Until(giveUp))
 	}
 }
 
