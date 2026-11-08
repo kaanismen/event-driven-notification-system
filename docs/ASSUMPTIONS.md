@@ -55,6 +55,7 @@ an open design decision point to the ADR.
 | A-50 | Whether to trust an incoming `traceparent` | Accepted from any caller, like the rest of the API (A-15). It only lets the caller's trace include our spans; it changes no behavior. | Continuing callers' traces is the point of propagation. | Accepted |
 | A-51 | What is not traced | Health probes and metric scrapes. A WebSocket connection is one span for its whole life. | Probes every few seconds would bury real traces. | Accepted |
 | A-52 | Where traces are stored | In Jaeger's memory inside Compose; they are lost when it restarts. | A demo viewer; production would export to a managed backend through the same OTLP setting. | Accepted |
+| A-53 | A client retries a scheduled request with the same `Idempotency-Key` after its `scheduledAt` has passed | If the only problems are scheduled times more than 1 minute in the past, the key is looked up before that rule is applied: the same request replays with `200`, a different one is `409`, and an unused key or a request without one gets the usual `422`. Every other rule is checked first, as before. | A retry must return what the first request got (ADR-0004); without this, a client whose first response was lost gets a `422` and cannot tell that the notification exists. | Accepted |
 | A-29 | Allowed `Idempotency-Key` values | 1-255 printable ASCII characters, not only spaces. Other values return `400`. | Keys end up in logs and indexes; UUIDs and typical client keys fit. | Accepted |
 
 ## Processing and scale

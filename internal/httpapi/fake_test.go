@@ -39,6 +39,37 @@ type fakeStore struct {
 	templates          map[uuid.UUID]notification.Template
 	getTemplatesCalls  [][]uuid.UUID
 	listTemplatesCalls []store.TemplateFilter
+
+	// keys, when not nil, makes Create and Replay honour idempotency keys with the real
+	// store's rules: the same key and hash replay, the same key with another hash is a
+	// conflict. Tests that need it set it to an empty map.
+	keys map[string]fakeKey
+}
+
+type fakeKey struct {
+	hash  []byte
+	batch bool
+	res   store.CreateResult
+}
+
+// lookupKey is the replay rule of the real store; the caller holds f.mu.
+func (f *fakeStore) lookupKey(p store.CreateParams) (store.CreateResult, bool, error) {
+	k, ok := f.keys[p.IdempotencyKey]
+	if !ok {
+		return store.CreateResult{}, false, nil
+	}
+	if k.batch != p.Batch || !bytes.Equal(k.hash, p.RequestHash) {
+		return store.CreateResult{}, false, store.ErrIdempotencyConflict
+	}
+	res := k.res
+	res.Replayed = true
+	return res, true, nil
+}
+
+func (f *fakeStore) Replay(_ context.Context, p store.CreateParams) (store.CreateResult, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lookupKey(p)
 }
 
 var fixedTime = time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
@@ -61,6 +92,14 @@ func (f *fakeStore) Create(_ context.Context, p store.CreateParams) (store.Creat
 	if f.createFn != nil {
 		return f.createFn(p)
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	remember := f.keys != nil && p.IdempotencyKey != ""
+	if remember {
+		if res, ok, err := f.lookupKey(p); ok || err != nil {
+			return res, err
+		}
+	}
 	var res store.CreateResult
 	if p.Batch {
 		id := uuid.Must(uuid.NewV7())
@@ -70,6 +109,9 @@ func (f *fakeStore) Create(_ context.Context, p store.CreateParams) (store.Creat
 		n := pendingFrom(r, res.BatchID)
 		n.CorrelationID = p.CorrelationID
 		res.Notifications = append(res.Notifications, n)
+	}
+	if remember {
+		f.keys[p.IdempotencyKey] = fakeKey{hash: p.RequestHash, batch: p.Batch, res: res}
 	}
 	return res, nil
 }
@@ -181,6 +223,16 @@ func newTestServer(t *testing.T) *testServer {
 	fs := &fakeStore{}
 	var logs bytes.Buffer
 	return &testServer{t: t, h: NewHandler(testDeps(logging.New(&logs, slog.LevelDebug), fs)), store: fs, logs: &logs}
+}
+
+// newTestServerAt is newTestServer with a clock the test controls through *now.
+func newTestServerAt(t *testing.T, now *time.Time) *testServer {
+	t.Helper()
+	s := newTestServer(t)
+	d := testDeps(logging.New(s.logs, slog.LevelDebug), s.store)
+	d.Now = func() time.Time { return *now }
+	s.h = NewHandler(d)
+	return s
 }
 
 // do sends a request; headers are given as alternating name, value pairs.

@@ -991,7 +991,8 @@ components:
             `pending` until then and is sent shortly after it, subject to the rate limit and
             any backlog. At most 1 minute in the past (to absorb clock differences) and at
             most 30 days ahead by default (`MAX_SCHEDULE_AHEAD`). Stored in UTC with
-            microsecond precision.
+            microsecond precision. A retry with the same `Idempotency-Key` and body still
+            replays the original result after this time has passed.
           example: '2026-11-06T09:00:00+03:00'
 
     Notification:

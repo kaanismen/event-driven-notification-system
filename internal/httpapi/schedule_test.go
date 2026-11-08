@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,4 +156,75 @@ func TestListScheduledFilter(t *testing.T) {
 	for _, bad := range []string{"yes", "1", "TRUE"} {
 		expectError(t, s.do(http.MethodGet, "/v1/notifications?scheduled="+bad, ""), http.StatusBadRequest, "invalid_query")
 	}
+}
+
+// A client that retries a scheduled request with the same Idempotency-Key after its
+// scheduled time has passed must get the stored result, not a validation error (A-53).
+func TestScheduledRequestReplaysAfterItsTime(t *testing.T) {
+	now := time.Now().UTC()
+	s := newTestServerAt(t, &now)
+	s.store.keys = map[string]fakeKey{}
+	body := scheduledSMS(now.Add(5 * time.Second).Format(time.RFC3339Nano))
+
+	first := s.do(http.MethodPost, "/v1/notifications", body, idempotencyHeader, "sched-1")
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first request: status = %d; body: %s", first.Code, first.Body.String())
+	}
+	now = now.Add(2 * time.Minute) // the scheduled time is now well past the tolerance
+
+	t.Run("same key and body replay", func(t *testing.T) {
+		rec := s.do(http.MethodPost, "/v1/notifications", body, idempotencyHeader, "sched-1")
+		if rec.Code != http.StatusOK || rec.Header().Get(replayedHeader) != "true" {
+			t.Fatalf("status = %d, replayed = %q; body: %s", rec.Code, rec.Header().Get(replayedHeader), rec.Body.String())
+		}
+		if got, want := rec.Header().Get("Location"), first.Header().Get("Location"); got == "" || got != want {
+			t.Errorf("Location = %q, want the original %q", got, want)
+		}
+	})
+	t.Run("no key is still rejected", func(t *testing.T) {
+		rec := s.do(http.MethodPost, "/v1/notifications", body)
+		expectError(t, rec, http.StatusUnprocessableEntity, "validation_failed")
+	})
+	t.Run("an unused key is still rejected", func(t *testing.T) {
+		rec := s.do(http.MethodPost, "/v1/notifications", body, idempotencyHeader, "sched-new")
+		expectError(t, rec, http.StatusUnprocessableEntity, "validation_failed")
+	})
+	t.Run("same key with a changed body is a conflict", func(t *testing.T) {
+		changed := strings.Replace(body, "1234", "9999", 1)
+		rec := s.do(http.MethodPost, "/v1/notifications", changed, idempotencyHeader, "sched-1")
+		expectError(t, rec, http.StatusConflict, "idempotency_key_conflict")
+	})
+	t.Run("other problems are still reported", func(t *testing.T) {
+		bad := strings.Replace(body, "+905551234567", "not-a-phone", 1)
+		rec := s.do(http.MethodPost, "/v1/notifications", bad, idempotencyHeader, "sched-1")
+		expectError(t, rec, http.StatusUnprocessableEntity, "validation_failed")
+	})
+	if n := len(s.store.createCalls); n != 1 {
+		t.Errorf("store.Create called %d times, want only the first request", n)
+	}
+}
+
+func TestScheduledBatchReplaysAfterItsTime(t *testing.T) {
+	now := time.Now().UTC()
+	s := newTestServerAt(t, &now)
+	s.store.keys = map[string]fakeKey{}
+	at := now.Add(5 * time.Second).Format(time.RFC3339Nano)
+	body := fmt.Sprintf(`{"notifications":[%s,%s]}`, scheduledSMS(at), validSMS)
+
+	first := s.do(http.MethodPost, "/v1/batches", body, idempotencyHeader, "sched-batch")
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first request: status = %d; body: %s", first.Code, first.Body.String())
+	}
+	now = now.Add(2 * time.Minute)
+
+	rec := s.do(http.MethodPost, "/v1/batches", body, idempotencyHeader, "sched-batch")
+	if rec.Code != http.StatusOK || rec.Header().Get(replayedHeader) != "true" ||
+		rec.Header().Get("Location") != first.Header().Get("Location") {
+		t.Fatalf("status = %d, replayed = %q, Location = %q (want %q); body: %s", rec.Code,
+			rec.Header().Get(replayedHeader), rec.Header().Get("Location"), first.Header().Get("Location"), rec.Body.String())
+	}
+	expectError(t, s.do(http.MethodPost, "/v1/batches", body), http.StatusUnprocessableEntity, "validation_failed")
+	changed := strings.Replace(body, "1234", "9999", 1)
+	expectError(t, s.do(http.MethodPost, "/v1/batches", changed, idempotencyHeader, "sched-batch"),
+		http.StatusConflict, "idempotency_key_conflict")
 }

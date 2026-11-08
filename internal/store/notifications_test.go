@@ -312,3 +312,36 @@ func TestTraceParentIsStoredAndClaimed(t *testing.T) {
 		t.Errorf("untraced row: trace_parent IS NULL = %t (err %v), want NULL, not ''", isNull, err)
 	}
 }
+
+// Replay looks a key up without creating anything (A-53).
+func TestReplayLooksUpWithoutCreating(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	p := single(smsRequest(1))
+	p.IdempotencyKey, p.RequestHash = "key-1", []byte("hash-a")
+
+	unused := p
+	unused.IdempotencyKey = "key-unused"
+	if res, found, err := s.Replay(ctx, unused); err != nil || found || res.Notifications != nil {
+		t.Fatalf("unused key: found=%t err=%v res=%+v, want not found", found, err, res)
+	}
+
+	first, err := s.Create(ctx, p)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	res, found, err := s.Replay(ctx, p)
+	if err != nil || !found || !res.Replayed || res.Notifications[0].ID != first.Notifications[0].ID {
+		t.Fatalf("same key and hash: found=%t err=%v res=%+v, want a replay of %s", found, err, res, first.Notifications[0].ID)
+	}
+
+	different := p
+	different.RequestHash = []byte("hash-b")
+	if _, _, err := s.Replay(ctx, different); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Errorf("different hash: err = %v, want ErrIdempotencyConflict", err)
+	}
+	if n := countRows(t, s, "notifications"); n != 1 {
+		t.Errorf("rows = %d, want 1: Replay must not create anything", n)
+	}
+}

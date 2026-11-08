@@ -24,6 +24,7 @@ import (
 // HTTP mapping is tested separately from SQL).
 type Store interface {
 	Create(ctx context.Context, p store.CreateParams) (store.CreateResult, error)
+	Replay(ctx context.Context, p store.CreateParams) (store.CreateResult, bool, error)
 	Get(ctx context.Context, id uuid.UUID) (notification.Notification, error)
 	GetBatch(ctx context.Context, batchID uuid.UUID) ([]notification.Notification, error)
 	Cancel(ctx context.Context, id uuid.UUID) (notification.Notification, error)
@@ -53,6 +54,9 @@ type Deps struct {
 	Events *events.Hub
 	// Tracer creates the request spans (ADR-0021); nil means tracing is off.
 	Tracer trace.Tracer
+	// Now is the clock that scheduledAt is checked against; nil means time.Now. Tests
+	// move it to replay a request after its scheduled time.
+	Now func() time.Time
 }
 
 // api holds the dependencies shared by all handlers.
@@ -63,13 +67,17 @@ type api struct {
 	maxScheduleAhead time.Duration
 	ready            func(ctx context.Context) error
 	events           *events.Hub
+	now              func() time.Time
 }
 
 // NewHandler returns the root handler with every route and middleware attached.
 func NewHandler(d Deps) http.Handler {
 	a := &api{
 		logger: d.Logger, store: d.Store, maxAttempts: d.MaxAttempts,
-		maxScheduleAhead: d.MaxScheduleAhead, ready: d.Ready, events: d.Events,
+		maxScheduleAhead: d.MaxScheduleAhead, ready: d.Ready, events: d.Events, now: d.Now,
+	}
+	if a.now == nil {
+		a.now = time.Now
 	}
 
 	mux := http.NewServeMux()

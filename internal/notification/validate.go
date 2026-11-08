@@ -102,7 +102,7 @@ func (r Request) Validate(now time.Time, maxScheduleAhead time.Duration) []Field
 
 	if r.ScheduledAt != nil {
 		switch at := *r.ScheduledAt; {
-		case at.Before(now.Add(-scheduleTolerance)):
+		case r.ScheduledInPast(now):
 			add("scheduledAt", "must not be in the past (got %s, now is %s)", at.Format(time.RFC3339), now.UTC().Format(time.RFC3339))
 		case at.After(now.Add(maxScheduleAhead)):
 			add("scheduledAt", "must be at most %s ahead", aheadText(maxScheduleAhead))
@@ -110,6 +110,13 @@ func (r Request) Validate(now time.Time, maxScheduleAhead time.Duration) []Field
 	}
 
 	return errs
+}
+
+// ScheduledInPast reports whether scheduledAt is further in the past than the clock
+// tolerance allows. Validate rejects such a request; the API first checks whether it is a
+// retry of one accepted while the time was still ahead (A-53).
+func (r Request) ScheduledInPast(now time.Time) bool {
+	return r.ScheduledAt != nil && r.ScheduledAt.Before(now.Add(-scheduleTolerance))
 }
 
 func recipientProblem(c Channel, recipient string) string {

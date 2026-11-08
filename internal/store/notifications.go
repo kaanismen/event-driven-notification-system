@@ -235,6 +235,26 @@ func replay(ctx context.Context, q querier, p CreateParams, resourceType string)
 	return CreateResult{BatchID: &storedID, Notifications: items, Replayed: true}, nil
 }
 
+// Replay returns what an earlier request with p's idempotency key created, without
+// creating anything; found is false when the key is unused. The rules are those of a
+// replay in Create: the same request hash returns the stored resource with Replayed set,
+// another hash is ErrIdempotencyConflict. The API uses it for a retry it would otherwise
+// reject, such as a scheduled request whose time has passed since it was accepted.
+func (s *Store) Replay(ctx context.Context, p CreateParams) (CreateResult, bool, error) {
+	resourceType := resourceNotification
+	if p.Batch {
+		resourceType = resourceBatch
+	}
+	res, err := replay(ctx, s.pool, p, resourceType)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CreateResult{}, false, nil
+	}
+	if err != nil {
+		return CreateResult{}, false, err
+	}
+	return res, true, nil
+}
+
 // Get returns one notification by ID.
 func (s *Store) Get(ctx context.Context, id uuid.UUID) (notification.Notification, error) {
 	return getNotification(ctx, s.pool, id)

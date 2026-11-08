@@ -99,11 +99,11 @@ func (c createRequest) applyTemplate(req *notification.Request, templates map[uu
 
 // validate converts one wire request, renders its template if it names one, and returns
 // it with every problem found.
-func (a *api) validate(c createRequest, templates map[uuid.UUID]notification.Template) (notification.Request, []notification.FieldError) {
+func (a *api) validate(c createRequest, templates map[uuid.UUID]notification.Template, now time.Time) (notification.Request, []notification.FieldError) {
 	req, errs := c.toDomain()
 	templateErrs := c.applyTemplate(&req, templates)
 	errs = append(errs, templateErrs...)
-	for _, e := range req.Validate(time.Now(), a.maxScheduleAhead) {
+	for _, e := range req.Validate(now, a.maxScheduleAhead) {
 		// When the template step failed there is no rendered text to judge, and the
 		// template errors already say what is wrong.
 		if e.Field == "content" && len(templateErrs) > 0 {
@@ -112,6 +112,24 @@ func (a *api) validate(c createRequest, templates map[uuid.UUID]notification.Tem
 		errs = append(errs, e)
 	}
 	return req, errs
+}
+
+// onlyInPast reports whether the one problem with req is a scheduledAt that has passed.
+// Validate adds that error whenever ScheduledInPast is true, so a single error is it.
+func onlyInPast(req notification.Request, errs []notification.FieldError, now time.Time) bool {
+	return len(errs) == 1 && req.ScheduledInPast(now)
+}
+
+// replayInPast handles a request whose only problems are scheduled times that have
+// passed. With an Idempotency-Key it may be a client retry of a request accepted while
+// those times were still ahead, so the key is looked up before the past-time rule is
+// applied (A-53): the same request replays (found), the same key with another request is
+// ErrIdempotencyConflict, and an unused key leaves the request to be rejected as invalid.
+func (a *api) replayInPast(ctx context.Context, reqs []notification.Request, batch bool, key string) (store.CreateResult, bool, error) {
+	if key == "" {
+		return store.CreateResult{}, false, nil
+	}
+	return a.store.Replay(ctx, a.createParams(ctx, reqs, batch, key))
 }
 
 // templatesFor loads every template the requests name, with one query for a whole
@@ -223,13 +241,20 @@ func (a *api) createNotification(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	req, errs := a.validate(body, templates)
-	if len(errs) > 0 {
-		a.fail(w, r, validationFailed(fieldErrors(nil, errs)))
-		return
+	now := a.now()
+	req, errs := a.validate(body, templates, now)
+	var res store.CreateResult
+	switch {
+	case len(errs) == 0:
+		res, err = a.store.Create(r.Context(), a.createParams(r.Context(), []notification.Request{req}, false, key))
+	case onlyInPast(req, errs, now):
+		var found bool
+		if res, found, err = a.replayInPast(r.Context(), []notification.Request{req}, false, key); err == nil && !found {
+			err = validationFailed(fieldErrors(nil, errs))
+		}
+	default:
+		err = validationFailed(fieldErrors(nil, errs))
 	}
-
-	res, err := a.store.Create(r.Context(), a.createParams(r.Context(), []notification.Request{req}, false, key))
 	if err != nil {
 		a.fail(w, r, err)
 		return
@@ -267,22 +292,32 @@ func (a *api) createBatch(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
+	now := a.now()
 	reqs := make([]notification.Request, len(body.Notifications))
 	var details []fieldErrorBody
+	allInPast := true // every invalid item's only problem is a passed scheduledAt
 	for i, item := range body.Notifications {
 		var errs []notification.FieldError
-		reqs[i], errs = a.validate(item, templates)
+		reqs[i], errs = a.validate(item, templates, now)
 		if len(errs) > 0 {
 			index := i
 			details = append(details, fieldErrors(&index, errs)...)
+			allInPast = allInPast && onlyInPast(reqs[i], errs, now)
 		}
 	}
-	if len(details) > 0 {
-		a.fail(w, r, validationFailed(details))
-		return
-	}
 
-	res, err := a.store.Create(r.Context(), a.createParams(r.Context(), reqs, true, key))
+	var res store.CreateResult
+	switch {
+	case len(details) == 0:
+		res, err = a.store.Create(r.Context(), a.createParams(r.Context(), reqs, true, key))
+	case allInPast:
+		var found bool
+		if res, found, err = a.replayInPast(r.Context(), reqs, true, key); err == nil && !found {
+			err = validationFailed(details)
+		}
+	default:
+		err = validationFailed(details)
+	}
 	if err != nil {
 		a.fail(w, r, err)
 		return
