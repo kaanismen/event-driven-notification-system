@@ -64,6 +64,7 @@ information.
 | `notifier_delivery_latency_seconds` | histogram | channel | Creation to acceptance, including queueing and retries. Both ends are database timestamps, so app and database clocks cannot skew it. |
 | `notifier_circuit_breaker_state` | gauge | channel | 0 closed, 1 open, 2 half-open (ADR-0015). |
 | `notifier_released_total` | counter | channel, reason | Claimed rows handed back unsent: `shutdown` or `breaker_open`. |
+| `notifier_result_write_retries_total` | counter | channel, outcome | Retries of a result write after a database error, by how the write ended: `recovered`, `not_owned`, `gave_up` (a duplicate send will follow) or `cancelled` (ADR-0005 amendment). |
 | `go_*`, `process_*` | various | | Runtime and process metrics from the client library. |
 
 A metric is recorded only after the database update it describes succeeded, so the counters agree

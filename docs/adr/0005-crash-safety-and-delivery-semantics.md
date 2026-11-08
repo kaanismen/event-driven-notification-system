@@ -66,3 +66,14 @@ Built as decided. Two details (ADR-0014): rows released at graceful shutdown get
 since they were never sent; and a row whose lease expires on its final attempt is moved to `failed`
 instead of being claimed past `max_attempts`. If the result write after a send fails, the row stays
 `processing` and is sent again after the lease expires (ASSUMPTIONS A-32).
+
+## Amendment (2026-11-08, review fix)
+
+A review reproduced the cost of a single result-write attempt: a 9 s PostgreSQL outage made all 20
+in-flight messages arrive twice. The worker now retries `MarkSent`, `MarkRetry` and `MarkFailed`
+with a capped, jittered backoff (100 ms doubling to 2 s) until `LeaseSafetyMargin` (1 s) before the
+lease ends, measured on the worker's own clock from the moment it started the claim. Retries stop
+at once if the ownership guard does not match or the process is shutting down. The lease check at
+startup reserves time for one full write after the slowest send. Each retried write is counted in
+`notifier_result_write_retries_total{channel,outcome}`; `outcome="gave_up"` means a duplicate is
+coming. A database outage longer than the lease still causes one.

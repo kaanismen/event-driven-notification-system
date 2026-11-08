@@ -4,6 +4,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -38,19 +39,23 @@ type Sender interface {
 	Send(ctx context.Context, m provider.Message) (provider.Result, error)
 }
 
-// resultWriteTimeout bounds the database update after a send, and the release of unsent
-// rows at shutdown. It is separate from the shutdown signal, because a result we fail to
-// record turns into a duplicate later, and an unreleased row waits for its lease.
-const resultWriteTimeout = 5 * time.Second
+// A result write that fails is retried after a short, capped, jittered wait: long enough
+// for a database failover or a restarted connection, short enough to finish well within
+// the lease (writeResult).
+const (
+	writeRetryBase = 100 * time.Millisecond
+	writeRetryMax  = 2 * time.Second
+)
 
 // Engine runs one independent pipeline per channel.
 type Engine struct {
-	store   Store
-	sender  Sender
-	logger  *slog.Logger
-	metrics *metrics.Metrics
-	cfg     config.Worker
-	backoff backoff
+	store        Store
+	sender       Sender
+	logger       *slog.Logger
+	metrics      *metrics.Metrics
+	cfg          config.Worker
+	backoff      backoff
+	writeBackoff backoff
 
 	// sendStarted, when set, is told the exact time the rate limiter admitted each send.
 	// Only tests set it: they check the 100-per-second ceiling on these times, which is
@@ -66,8 +71,9 @@ type Engine struct {
 func New(st Store, sender Sender, logger *slog.Logger, m *metrics.Metrics, cfg config.Worker, tracer trace.Tracer) *Engine {
 	return &Engine{
 		store: st, sender: sender, logger: logger.With("component", "worker"), metrics: m, cfg: cfg,
-		backoff: newBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay),
-		tracer:  tracer,
+		backoff:      newBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay),
+		writeBackoff: newBackoff(writeRetryBase, writeRetryMax),
+		tracer:       tracer,
 	}
 }
 
@@ -159,10 +165,12 @@ func (e *Engine) runChannel(ctx context.Context, ch notification.Channel) {
 }
 
 // job is one claimed row handed to a sender. probe marks the single message a half-open
-// circuit breaker lets through to test the provider.
+// circuit breaker lets through to test the provider. leaseEnd is the latest moment the
+// lease can end, on this process's clock (see dispatch).
 type job struct {
-	n     notification.Notification
-	probe bool
+	n        notification.Notification
+	probe    bool
+	leaseEnd time.Time
 }
 
 func (e *Engine) dispatch(ctx context.Context, logger *slog.Logger, ch notification.Channel, brk *breaker, jobs chan<- job) {
@@ -193,6 +201,10 @@ func (e *Engine) dispatch(ctx context.Context, logger *slog.Logger, ch notificat
 			limit = 1
 		}
 
+		// The database sets locked_until = now() + lease after this call starts, so the
+		// lease ends no earlier than this. Measured on this process's monotonic clock, it
+		// does not depend on the app and database clocks agreeing.
+		leaseEnd := time.Now().Add(e.cfg.Lease)
 		batch, err := e.store.Claim(ctx, store.ClaimParams{
 			Channel: ch,
 			Limit:   limit,
@@ -212,7 +224,7 @@ func (e *Engine) dispatch(ctx context.Context, logger *slog.Logger, ch notificat
 
 		for i, n := range batch {
 			select {
-			case jobs <- job{n: n, probe: probe}:
+			case jobs <- job{n: n, probe: probe, leaseEnd: leaseEnd}:
 			case <-ctx.Done():
 				// Shutting down: hand the rows nobody started back to the queue now,
 				// instead of leaving them until their lease expires (ADR-0014).
@@ -274,7 +286,7 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 
 	// From here on, finish even if shutdown starts: cancelling a request the provider
 	// may already have accepted, or skipping the result update, causes a duplicate send.
-	// The provider timeout and resultWriteTimeout bound how long this takes.
+	// The provider timeout and the row's lease (writeResult) bound how long this takes.
 	keep := context.WithoutCancel(ctx)
 
 	sendCtx, sendSpan := e.tracer.Start(keep, "provider call", trace.WithSpanKind(trace.SpanKindClient))
@@ -293,13 +305,13 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 	}
 	sendSpan.End()
 
-	writeCtx, cancel := context.WithTimeout(keep, resultWriteTimeout)
-	defer cancel()
-	writeCtx, writeSpan := e.tracer.Start(writeCtx, "record result")
+	// The span hangs off ctx, not keep: writeResult must see shutdown to stop retrying,
+	// and shields each write attempt from it on its own.
+	recordCtx, writeSpan := e.tracer.Start(ctx, "record result")
 	defer writeSpan.End()
 
 	if sendErr != nil {
-		outcome = e.recordFailure(writeCtx, logger, n, sendErr, elapsed)
+		outcome = e.recordFailure(recordCtx, logger, j, sendErr, elapsed)
 		if outcome == spanFailed {
 			span.SetStatus(codes.Error, sendErr.Error())
 		}
@@ -309,10 +321,15 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 	if res.MessageID == "" {
 		logger.WarnContext(ctx, "provider accepted the message without a messageId")
 	}
-	owned, latency, err := e.store.MarkSent(writeCtx, n.ID, n.Attempts, res.MessageID)
+	var latency time.Duration
+	owned, err := e.writeResult(recordCtx, logger, j, "mark sent", func(ctx context.Context) (bool, error) {
+		ok, l, err := e.store.MarkSent(ctx, n.ID, n.Attempts, res.MessageID)
+		latency = l
+		return ok, err
+	})
 	switch {
 	case err != nil:
-		logger.ErrorContext(ctx, "could not record successful delivery", "error", err)
+		logger.ErrorContext(ctx, "could not record successful delivery: the row stays processing and is sent again after its lease", "error", err)
 	case !owned:
 		logger.WarnContext(ctx, "delivery not recorded: row no longer owned by this worker")
 	default:
@@ -328,15 +345,18 @@ func (e *Engine) deliver(ctx context.Context, logger *slog.Logger, limit limits,
 // everything else (ADR-0002). A retry is a row back in the queue with a later due time,
 // not a sleep in this goroutine: the sender is free at once, the retry survives a
 // restart, and it passes the channel's rate limiter like any first attempt (DR-06).
-// ctx bounds the database update and carries the request ID for the log lines. It
-// returns the outcome for the delivery span.
-func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, n notification.Notification, sendErr error, elapsed time.Duration) string {
+// ctx is the delivery's context, passed to writeResult, and carries the request ID for
+// the log lines. It returns the outcome for the delivery span.
+func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, j job, sendErr error, elapsed time.Duration) string {
+	n := j.n
 	reason := sendErr.Error()
 	attrs := []any{"error", reason, "duration_ms", elapsed.Milliseconds()}
 
 	if provider.Retryable(sendErr) && n.Attempts < n.MaxAttempts {
 		delay := e.backoff.delay(n.Attempts, provider.RetryAfter(sendErr))
-		owned, err := e.store.MarkRetry(ctx, n.ID, n.Attempts, delay, reason)
+		owned, err := e.writeResult(ctx, logger, j, "mark retry", func(ctx context.Context) (bool, error) {
+			return e.store.MarkRetry(ctx, n.ID, n.Attempts, delay, reason)
+		})
 		switch {
 		case err != nil:
 			logger.ErrorContext(ctx, "could not schedule retry", append(attrs, "db_error", err)...)
@@ -355,7 +375,9 @@ func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, n notif
 	if provider.Retryable(sendErr) {
 		why = "no attempts left"
 	}
-	owned, err := e.store.MarkFailed(ctx, n.ID, n.Attempts, reason)
+	owned, err := e.writeResult(ctx, logger, j, "mark failed", func(ctx context.Context) (bool, error) {
+		return e.store.MarkFailed(ctx, n.ID, n.Attempts, reason)
+	})
 	switch {
 	case err != nil:
 		logger.ErrorContext(ctx, "could not record failed delivery", append(attrs, "db_error", err)...)
@@ -369,10 +391,65 @@ func (e *Engine) recordFailure(ctx context.Context, logger *slog.Logger, n notif
 	return spanUnknown
 }
 
+// writeResult runs one result write (MarkSent, MarkRetry or MarkFailed) and retries it
+// while the database returns errors. Without retries, a short database outage after the
+// provider accepted a message leaves the row in processing, and it is sent again when its
+// lease expires (A-32). Retries stop at once when the row is not owned any more (another
+// worker took it, so retrying cannot help), when ctx is cancelled (shutdown), or when the
+// next attempt could not finish LeaseSafetyMargin before the lease ends. Each attempt runs
+// without ctx's cancellation, so shutdown never cuts a write short; it only stops new
+// ones. The returned error says why the retries stopped.
+func (e *Engine) writeResult(ctx context.Context, logger *slog.Logger, j job, op string, write func(context.Context) (bool, error)) (bool, error) {
+	giveUp := j.leaseEnd.Add(-config.LeaseSafetyMargin)
+	keep := context.WithoutCancel(ctx)
+	// The first attempt always gets a full timeout, even if the send took so long that the
+	// margin has already started: the ownership guard still makes a late write safe.
+	timeout := config.ResultWriteTimeout
+	for retries := 0; ; retries++ {
+		attemptCtx, cancel := context.WithTimeout(keep, timeout)
+		owned, err := write(attemptCtx)
+		cancel()
+		if err == nil {
+			if retries > 0 {
+				// A retry that finds the row not owned may also mean an earlier attempt
+				// committed but its reply was lost; either way there is nothing to retry.
+				outcome := metrics.WriteRecovered
+				if !owned {
+					outcome = metrics.WriteNotOwned
+				}
+				e.metrics.ResultWriteRetries(j.n.Channel, outcome, retries)
+			}
+			return owned, nil
+		}
+
+		var stop, why string
+		switch wait := e.writeBackoff.delay(retries+1, 0); {
+		case ctx.Err() != nil:
+			stop, why = metrics.WriteCancelled, "shutting down"
+		case time.Until(giveUp) <= wait:
+			stop, why = metrics.WriteGaveUp, "the lease is about to end"
+		default:
+			logger.DebugContext(ctx, "result write failed, retrying",
+				"operation", op, "retry", retries+1, "retry_in_ms", wait.Milliseconds(), "error", err)
+			sleep(ctx, wait)
+			if ctx.Err() != nil {
+				stop, why = metrics.WriteCancelled, "shutting down"
+			}
+		}
+		if stop != "" {
+			if retries > 0 {
+				e.metrics.ResultWriteRetries(j.n.Channel, stop, retries)
+			}
+			return false, fmt.Errorf("%s: gave up after %d retries, %s: %w", op, retries, why, err)
+		}
+		timeout = min(config.ResultWriteTimeout, time.Until(giveUp))
+	}
+}
+
 // release hands an unsent row back to the queue, at shutdown or when the breaker is
 // open. At shutdown ctx is already cancelled, so the update gets its own short deadline.
 func (e *Engine) release(ctx context.Context, logger *slog.Logger, n notification.Notification, reason string) {
-	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resultWriteTimeout)
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), config.ResultWriteTimeout)
 	defer cancel()
 	owned, err := e.store.Release(releaseCtx, n.ID, n.Attempts)
 	switch {

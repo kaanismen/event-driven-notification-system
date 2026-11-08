@@ -298,6 +298,7 @@ Invalid values stop the app at startup with a clear error rather than falling ba
 | `notifier_delivery_latency_seconds{channel}` | End-to-end time from creation to `sent` |
 | `notifier_circuit_breaker_state{channel}` | 0 closed, 1 open, 2 half-open |
 | `notifier_released_total{channel,reason}` | Claimed rows handed back unsent (shutdown or breaker) |
+| `notifier_result_write_retries_total{channel,outcome}` | Result-write retries after a database error; `outcome="gave_up"` means the row will be sent again |
 | `notifier_event_subscribers`, `notifier_event_subscribers_dropped_total{reason}` | Open real-time connections, and those closed for being slow or for a resync |
 
 For example, the failure rate over five minutes is

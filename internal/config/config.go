@@ -63,6 +63,17 @@ const maxRetryDelay = time.Hour
 // for the near future, and a far bound catches typos such as a year of 2062.
 const maxScheduleAhead = 365 * 24 * time.Hour
 
+// After each provider call the worker writes the result to the database (A-32). These
+// values are fixed, not settings: they are shared by the worker and the lease check below.
+const (
+	// ResultWriteTimeout bounds one attempt to write a delivery result, and the release of
+	// an unsent row at shutdown.
+	ResultWriteTimeout = 5 * time.Second
+	// LeaseSafetyMargin is how long before a row's lease ends the worker stops retrying a
+	// failed result write, so its last update lands before another worker can reclaim it.
+	LeaseSafetyMargin = time.Second
+)
+
 // Load reads the configuration through getenv (os.Getenv in production, a map lookup in
 // tests). It reports every invalid setting at once, so a misconfigured deployment fails
 // with one complete message instead of one error per restart.

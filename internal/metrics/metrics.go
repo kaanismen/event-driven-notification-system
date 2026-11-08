@@ -38,6 +38,14 @@ const (
 	ReleaseBreaker  = "breaker_open"
 )
 
+// How a delivery result write that needed retries finally ended.
+const (
+	WriteRecovered = "recovered" // a retry wrote the result
+	WriteNotOwned  = "not_owned" // a retry found the row taken over or already written
+	WriteGaveUp    = "gave_up"   // the lease was about to end: the row will be sent again
+	WriteCancelled = "cancelled" // shutdown started
+)
+
 // Reasons a real-time subscriber was disconnected by the server (ADR-0020).
 const (
 	SubscriberSlow   = "slow"   // its buffer filled up: it was not reading fast enough
@@ -53,6 +61,7 @@ type Metrics struct {
 	deliveryLatency  *prometheus.HistogramVec
 	breakerState     *prometheus.GaugeVec
 	releases         *prometheus.CounterVec
+	writeRetries     *prometheus.CounterVec
 	subscribers      prometheus.Gauge
 	subscribersEnded *prometheus.CounterVec
 }
@@ -86,6 +95,10 @@ func New() *Metrics {
 			Name: "notifier_released_total",
 			Help: "Claimed rows handed back to the queue unsent, with their attempt given back.",
 		}, []string{"channel", "reason"}),
+		writeRetries: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "notifier_result_write_retries_total",
+			Help: "Retries of a delivery result write after a database error, by how the write ended: recovered, not_owned, gave_up (the row will be sent again) or cancelled.",
+		}, []string{"channel", "outcome"}),
 		subscribers: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "notifier_event_subscribers",
 			Help: "Open real-time status connections on this instance (ADR-0020).",
@@ -97,7 +110,7 @@ func New() *Metrics {
 	}
 	m.registry.MustRegister(
 		m.deliveries, m.providerDuration, m.deliveryLatency, m.breakerState, m.releases,
-		m.subscribers, m.subscribersEnded,
+		m.writeRetries, m.subscribers, m.subscribersEnded,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -127,6 +140,12 @@ func (m *Metrics) BreakerState(ch notification.Channel, state int) {
 // Released counts a row handed back unsent.
 func (m *Metrics) Released(ch notification.Channel, reason string) {
 	m.releases.WithLabelValues(string(ch), reason).Inc()
+}
+
+// ResultWriteRetries counts the retries one result write needed, labelled with how the
+// write ended, once it has ended.
+func (m *Metrics) ResultWriteRetries(ch notification.Channel, outcome string, retries int) {
+	m.writeRetries.WithLabelValues(string(ch), outcome).Add(float64(retries))
 }
 
 // Subscribers adds delta to the number of open real-time connections.

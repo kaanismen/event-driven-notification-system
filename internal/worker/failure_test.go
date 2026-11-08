@@ -68,9 +68,10 @@ func startEngine(t *testing.T, st *store.Store, opts mock.Options, cfg config.Wo
 	return m, startEngineWith(t, st, m, cfg, providerTimeout, setup...)
 }
 
-// startEngineWith is startEngine with any provider handler. setup functions adjust the
-// engine before it starts, for example to observe send start times.
-func startEngineWith(t *testing.T, st *store.Store, h http.Handler, cfg config.Worker, providerTimeout time.Duration, setup ...func(*Engine)) func() {
+// startEngineWith is startEngine with any provider handler and any Store, for example the
+// real store with injected failures. setup functions adjust the engine before it starts,
+// for example to observe send start times.
+func startEngineWith(t *testing.T, st Store, h http.Handler, cfg config.Worker, providerTimeout time.Duration, setup ...func(*Engine)) func() {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	e := New(st, provider.NewClient(srv.URL, providerTimeout), slog.New(slog.DiscardHandler), metrics.New(), cfg, noTracer)
