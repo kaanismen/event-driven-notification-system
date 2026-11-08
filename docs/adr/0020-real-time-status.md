@@ -99,7 +99,10 @@ sequenceDiagram
   with an open connection. It is the main operational risk of this design.
 - NOTIFY takes a short global lock at commit. At our rate (up to about 300 sends per second, two
   or three events each) this is negligible; at much higher write rates an events table or a
-  message broker would replace it.
+  message broker would replace it. Because that lock serializes the commit of every transaction
+  that notifies, and the trigger fires on every status or attempts change, it caps the whole
+  database's write throughput at high volume; the fix is one NOTIFY per statement instead of per
+  row, or dropping the trigger for polling or change data capture.
 - One extra database connection per instance, outside `DB_MAX_CONNS`.
 - A batch snapshot can be several MB for long emails; clients must raise their message size
   limit (the spec says so; `cmd/watch` uses 32 MiB).

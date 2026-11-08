@@ -407,10 +407,18 @@ These are deliberate trade-offs for the assessment's scope, each discussed in an
 
 - **At-least-once delivery.** If the app crashes after the provider accepted a message but
   before the result is saved, the message is sent again. The `Idempotency-Key` header lets a
-  provider deduplicate; the window is one provider call (ADR-0005).
-- **The rate limit is per instance.** One instance guarantees 100/s per channel. Running N
-  instances allows N × 100/s unless the limit is divided between them or moved to shared storage
-  (ADR-0003).
+  provider deduplicate; the window is one provider call, or a database outage that outlasts the
+  lease (A-32, ADR-0005).
+- **The rate limit is per instance** ([ratelimit.go](internal/worker/ratelimit.go), ADR-0003): N
+  instances send up to N × 100/s per channel. The fix is a shared token bucket in Postgres or Redis.
+- **Every status or attempts change calls `pg_notify`** ([migration 000005](migrations/000005_add_status_events.up.sql)).
+  NOTIFY is serialized at commit, which caps write throughput at high volume; the fix is to batch it
+  or drop it for polling or change data capture (ADR-0020).
+- **The queue-depth metric runs `COUNT ... GROUP BY` on every scrape** ([depth.go](internal/store/depth.go)),
+  so its cost grows with the backlog; the fix is to refresh it on an interval or use estimates.
+- **A crash uses up one attempt**, even for claimed rows that were never sent, because `attempts`
+  goes up at claim time ([claim.go](internal/store/claim.go)). By design (ADR-0005): a message that
+  crashes every worker still reaches the dead-letter state.
 - **"Sent" means the provider accepted it.** There are no delivery receipts from handsets or
   inboxes (A-01).
 - **No authentication or tenants.** Idempotency keys are global, and `/metrics` is open (A-15,
